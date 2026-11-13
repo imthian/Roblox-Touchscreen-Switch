@@ -1,30 +1,32 @@
 <#
 .SYNOPSIS
-    Administrator Installer for Roblox Touchscreen Switch v1.1.0 (Windows 11)
+    Administrator Installer for Roblox Touchscreen Switch (Windows 11)
 .DESCRIPTION
-    1. Verifies Administrator privileges.
-    2. Inspects touchscreen devices using locale-independent HID Usage (000D:0004) + FriendlyName and enforces single-device safeguard (or allows Admin pinning).
-    3. Creates C:\Program Files\RobloxTouchscreenSwitch and locks NTFS ACLs (SYSTEM + Administrators FullControl; Users ReadAndExecute only).
-    4. Creates C:\ProgramData\RobloxTouchscreenSwitch and locks NTFS ACLs (SYSTEM + Administrators FullControl; Users ReadAndExecute ONLY — preventing symlink redirection or log tampering).
-    5. Compiles RobloxTouchSwitch.exe natively via Windows .NET Framework csc.exe.
-    6. Registers three SYSTEM Scheduled Tasks in \RobloxTouchscreenSwitch\ using the full path to powershell.exe:
-       - DisableTouchscreen (Triggerable by Authenticated Users via SDDL '(A;;GRGX;;;AU)')
-       - EnableTouchscreen  (Triggerable by Authenticated Users via SDDL '(A;;GRGX;;;AU)')
-       - RestoreTouchOnBoot (Automatic startup fail-safe so rebooting always restores touch)
+    1. Verifies Administrator privileges and reads single-source VERSION file.
+    2. Inspects touchscreen devices using locale-independent HID Usage (000D:0004) + FriendlyName.
+       Allows pinning a single node, multiple composite nodes (e.g., "1,2"), or "ALL" when a panel exposes multiple HID nodes.
+    3. Creates $env:ProgramFiles\RobloxTouchscreenSwitch, sets Owner to Administrators, and locks NTFS ACLs.
+    4. Defends against ProgramData pre-creation takeover: recreates $env:ProgramData\RobloxTouchscreenSwitch cleanly,
+       sets Owner to Administrators ($DataAcl.SetOwner), and locks NTFS ACLs to Read-Only for Standard Users.
+    5. Compiles RobloxTouchSwitch.exe natively via Windows .NET Framework csc.exe (referencing System.Runtime.Serialization.dll).
+    6. Registers three SYSTEM Scheduled Tasks in \RobloxTouchscreenSwitch\ using the full path to powershell.exe.
     7. Creates All-Users Desktop and Start Menu shortcuts.
 #>
 [CmdletBinding()]
 param()
 
 $ErrorActionPreference = 'Stop'
-$AppVersion = '1.1.0'
+
+$ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$PackageRoot = Split-Path -Parent $ScriptRoot
+$VersionFile = Join-Path $PackageRoot 'VERSION'
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.0' }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - WINDOWS 11 ADMIN INSTALLER" -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Verify Administrator Elevation
 $CurrentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $CurrentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "[ERROR] Administrator privileges are required to install Roblox Touchscreen Switch." -ForegroundColor Red
@@ -32,16 +34,14 @@ if (-not $CurrentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
     exit 1
 }
 
-$ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$PackageRoot = Split-Path -Parent $ScriptRoot
-$InstallDir  = 'C:\Program Files\RobloxTouchscreenSwitch'
-$DataDir     = 'C:\ProgramData\RobloxTouchscreenSwitch'
+$InstallDir  = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch'
+$DataDir     = Join-Path $env:ProgramData  'RobloxTouchscreenSwitch'
 $LogPath     = Join-Path $DataDir 'system-activity.log'
 
-# 2. Pre-Flight Hardware Inspection & Safeguard Check (Locale-Independent HID Usage 000D:0004 + FriendlyName)
+# 2. Pre-Flight Hardware Inspection & Safeguard Check
 Write-Host "[1/6] Inspecting Windows 11 HID Touchscreen Hardware..." -ForegroundColor Yellow
 
-$WmiDevices = @(Get-CimInstance -Namespace 'root\CIMV2' -ClassName 'Win32_PnPEntity' -Filter "PNPClass = 'HIDClass'" -ErrorAction SilentlyContinue)
+$WmiDevices = @(Get-CimInstance -Namespace 'root\CIMV2' -ClassName 'Win32_PnPEntity' -Filter "PNPClass = 'HIDClass'" -ErrorAction Stop)
 $ActiveCandidates = @()
 foreach ($dev in $WmiDevices) {
     $IsTouchName = ($dev.Name -eq 'HID-compliant touch screen')
@@ -61,7 +61,7 @@ foreach ($dev in $WmiDevices) {
     }
 }
 
-$PinnedInstanceId = ""
+$PinnedInstanceIds = @()
 if ($ActiveCandidates.Count -eq 0) {
     Write-Host "  [WARNING] No touchscreen device (HID Usage 000D:0004) was currently detected." -ForegroundColor Yellow
     Write-Host "  Installation will proceed so the utility is ready, but please verify Device Manager." -ForegroundColor Yellow
@@ -80,24 +80,44 @@ else {
         Write-Host "    [$($i+1)] InstanceId: $($d.DeviceID) | Name: $($d.Name) | Status: $($d.Status) (Code $($d.ConfigManagerErrorCode))" -ForegroundColor White
     }
     Write-Host ""
-    Write-Host "  As Administrator, you may pin the exact InstanceId now, or press Enter to leave unpinned" -ForegroundColor Yellow
-    Write-Host "  (if left unpinned while >1 devices exist, the utility will safely block execution)." -ForegroundColor Yellow
-    $Choice = Read-Host "  Enter device number [1-$($ActiveCandidates.Count)] to pin, or press Enter to skip"
-    if ($Choice -match '^\d+$' -and [int]$Choice -ge 1 -and [int]$Choice -le $ActiveCandidates.Count) {
-        $PinnedInstanceId = $ActiveCandidates[[int]$Choice - 1].DeviceID
-        Write-Host "  [OK] Pinned InstanceId: $PinnedInstanceId" -ForegroundColor Green
+    Write-Host "  Note: Some touch panels expose 2 composite HID nodes. You may enter a single number (e.g. 1)," -ForegroundColor Yellow
+    Write-Host "  comma-separated numbers (e.g. 1,2), or 'ALL' to pin all listed nodes." -ForegroundColor Yellow
+    $Choice = Read-Host "  Enter selection [1-$($ActiveCandidates.Count), comma list, or ALL], or press Enter to leave unpinned"
+    if ($Choice.Trim() -ieq 'ALL') {
+        $PinnedInstanceIds = @($ActiveCandidates | Select-Object -ExpandProperty DeviceID)
+        Write-Host "  [OK] Pinned ALL ($($PinnedInstanceIds.Count)) touchscreen nodes." -ForegroundColor Green
+    }
+    elseif ($Choice.Trim().Length -gt 0) {
+        $Parts = $Choice.Split(',')
+        foreach ($p in $Parts) {
+            $idxStr = $p.Trim()
+            if ($idxStr -match '^\d+$' -and [int]$idxStr -ge 1 -and [int]$idxStr -le $ActiveCandidates.Count) {
+                $PinnedInstanceIds += $ActiveCandidates[[int]$idxStr - 1].DeviceID
+            }
+        }
+        $PinnedInstanceIds = @($PinnedInstanceIds | Select-Object -Unique)
+        if ($PinnedInstanceIds.Count -gt 0) {
+            Write-Host "  [OK] Pinned InstanceId(s): $($PinnedInstanceIds -join '; ')" -ForegroundColor Green
+        }
     }
 }
 
-# 3. Create Protected Program Files Directory & Lock Down NTFS ACLs
+# 3. Create Protected Program Files Directory & Lock Down Owner + NTFS ACLs
 Write-Host ""
 Write-Host "[2/6] Creating Protected Program Directory & Applying Security ACLs..." -ForegroundColor Yellow
-if (-not (Test-Path -LiteralPath $InstallDir)) {
-    New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
+
+Get-Process -Name 'RobloxTouchSwitch' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+if (Test-Path -LiteralPath $InstallDir) {
+    Remove-Item -LiteralPath $InstallDir -Recurse -Force
 }
+New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $ScriptRoot 'Invoke-TouchscreenAction.ps1') -Destination (Join-Path $InstallDir 'Invoke-TouchscreenAction.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $ScriptRoot 'RobloxTouchSwitchApp.cs')      -Destination (Join-Path $InstallDir 'RobloxTouchSwitchApp.cs') -Force
+if (Test-Path -LiteralPath $VersionFile) {
+    Copy-Item -LiteralPath $VersionFile -Destination (Join-Path $InstallDir 'VERSION') -Force
+}
 
 $IconSrc = Join-Path $PackageRoot 'assets\RobloxTouchSwitch.ico'
 $PngSrc  = Join-Path $PackageRoot 'assets\RobloxTouchSwitch.png'
@@ -106,14 +126,15 @@ if (Test-Path -LiteralPath $IconSrc) { Copy-Item -LiteralPath $IconSrc -Destinat
 if (Test-Path -LiteralPath $PngSrc)  { Copy-Item -LiteralPath $PngSrc  -Destination (Join-Path $InstallDir 'RobloxTouchSwitch.png') -Force }
 if (Test-Path -LiteralPath $ArtSrc)  { Copy-Item -LiteralPath $ArtSrc  -Destination (Join-Path $InstallDir 'Xbox_Library_CoverArt.png') -Force }
 
-# Write protected config.json
+$PrimaryPin = if ($PinnedInstanceIds.Count -gt 0) { $PinnedInstanceIds[0] } else { "" }
 $ConfigObj = [ordered]@{
-    AppName          = 'Roblox Touchscreen Switch'
-    Version          = $AppVersion
-    InstalledDate    = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-    InstalledByAdmin = $env:USERNAME
-    ComputerName     = $env:COMPUTERNAME
-    PinnedInstanceId = $PinnedInstanceId
+    AppName           = 'Roblox Touchscreen Switch'
+    Version           = $AppVersion
+    InstalledDate     = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    InstalledByAdmin  = $env:USERNAME
+    ComputerName      = $env:COMPUTERNAME
+    PinnedInstanceId  = $PrimaryPin
+    PinnedInstanceIds = $PinnedInstanceIds
 }
 $ConfigObj | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $InstallDir 'config.json') -Encoding UTF8 -Force
 
@@ -133,8 +154,6 @@ $ExeOutput = Join-Path $InstallDir 'RobloxTouchSwitch.exe'
 $CsSource  = Join-Path $InstallDir 'RobloxTouchSwitchApp.cs'
 $IconArg   = if (Test-Path -LiteralPath (Join-Path $InstallDir 'RobloxTouchSwitch.ico')) { "/win32icon:`"$(Join-Path $InstallDir 'RobloxTouchSwitch.ico')`"" } else { "" }
 
-Get-Process -Name 'RobloxTouchSwitch' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-
 $CompileArgs = @(
     '/nologo',
     '/target:winexe',
@@ -144,6 +163,8 @@ $CompileArgs = @(
     '/reference:System.Core.dll',
     '/reference:System.Drawing.dll',
     '/reference:System.Management.dll',
+    '/reference:System.Runtime.Serialization.dll',
+    '/reference:System.Xml.dll',
     '/reference:System.Windows.Forms.dll'
 )
 if ($IconArg) { $CompileArgs += $IconArg }
@@ -155,10 +176,6 @@ if ($CompileProc.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $ExeOutput)) {
 }
 Write-Host "  [OK] Compiled native GUI executable: $ExeOutput" -ForegroundColor Green
 
-# Harden NTFS permissions on C:\Program Files\RobloxTouchscreenSwitch
-# SYSTEM (S-1-5-18) = FullControl
-# Administrators (S-1-5-32-544) = FullControl
-# Users (S-1-5-32-545) = ReadAndExecute ONLY
 $SidSystem = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
 $SidAdmins = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
 $SidUsers  = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')
@@ -171,34 +188,32 @@ $RuleAdmins = New-Object System.Security.AccessControl.FileSystemAccessRule($Sid
 $RuleUsers  = New-Object System.Security.AccessControl.FileSystemAccessRule($SidUsers,  [System.Security.AccessControl.FileSystemRights]::ReadAndExecute, $InheritFlags, $PropFlags, [System.Security.AccessControl.AccessControlType]::Allow)
 
 $Acl = New-Object System.Security.AccessControl.DirectorySecurity
+$Acl.SetOwner($SidAdmins)
 $Acl.SetAccessRuleProtection($true, $false)
 $Acl.AddAccessRule($RuleSystem)
 $Acl.AddAccessRule($RuleAdmins)
 $Acl.AddAccessRule($RuleUsers)
 Set-Acl -LiteralPath $InstallDir -AclObject $Acl
 
-Get-ChildItem -LiteralPath $InstallDir -Recurse | ForEach-Object {
+Get-ChildItem -LiteralPath $InstallDir -Recurse -Force | ForEach-Object {
     $ItemAcl = Get-Acl -LiteralPath $_.FullName
+    $ItemAcl.SetOwner($SidAdmins)
     $ItemAcl.SetAccessRuleProtection($false, $true)
     Set-Acl -LiteralPath $_.FullName -AclObject $ItemAcl
 }
-Write-Host "  [OK] Locked NTFS ACLs on '$InstallDir' (Standard Users = Read & Execute Only)." -ForegroundColor Green
+Write-Host "  [OK] Locked Owner (Administrators) & NTFS ACLs on '$InstallDir'." -ForegroundColor Green
 
-# 4. Create Locked ProgramData Folder for SYSTEM Audit Logs & Status (Users = ReadAndExecute ONLY)
+# 4. Recreate Clean ProgramData Folder, Enforce Administrators Ownership, and Lock NTFS ACLs
+#    (Eliminates pre-creation folder ownership takeover and pre-planted hardlinks/symlinks)
 Write-Host ""
 Write-Host "[4/6] Configuring Tamper-Proof SYSTEM Audit Log & Status Directory ($DataDir)..." -ForegroundColor Yellow
 if (Test-Path -LiteralPath $DataDir) {
-    $ExistingDir = Get-Item -LiteralPath $DataDir -Force
-    if (($ExistingDir.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "SECURITY ABORT: Existing '$DataDir' is a ReparsePoint (symlink/junction). Remove it manually as Administrator."
-    }
-} else {
-    New-Item -Path $DataDir -ItemType Directory -Force | Out-Null
+    Remove-Item -LiteralPath $DataDir -Recurse -Force
 }
+New-Item -Path $DataDir -ItemType Directory -Force | Out-Null
 
-# Lock C:\ProgramData\RobloxTouchscreenSwitch to SYSTEM/Admins FullControl and Users ReadAndExecute ONLY.
-# Standard Users CANNOT delete, symlink, or modify files written by SYSTEM.
 $DataAcl = New-Object System.Security.AccessControl.DirectorySecurity
+$DataAcl.SetOwner($SidAdmins)
 $DataAcl.SetAccessRuleProtection($true, $false)
 $DataAcl.AddAccessRule($RuleSystem)
 $DataAcl.AddAccessRule($RuleAdmins)
@@ -206,14 +221,15 @@ $DataAcl.AddAccessRule($RuleUsers)
 Set-Acl -LiteralPath $DataDir -AclObject $DataAcl
 
 $InitLogLine = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [INSTALLER] [INFO] Installed Roblox Touchscreen Switch v$AppVersion on $env:COMPUTERNAME by Administrator '$env:USERNAME'."
-Add-Content -LiteralPath $LogPath -Value $InitLogLine -Encoding UTF8
+Set-Content -LiteralPath $LogPath -Value $InitLogLine -Encoding UTF8 -Force
 
-Get-ChildItem -LiteralPath $DataDir -Recurse | ForEach-Object {
+Get-ChildItem -LiteralPath $DataDir -Recurse -Force | ForEach-Object {
     $ItemAcl = Get-Acl -LiteralPath $_.FullName
+    $ItemAcl.SetOwner($SidAdmins)
     $ItemAcl.SetAccessRuleProtection($false, $true)
     Set-Acl -LiteralPath $_.FullName -AclObject $ItemAcl
 }
-Write-Host "  [OK] Locked NTFS ACLs on '$DataDir' (Standard Users = Read-Only; SYSTEM/Admins = FullControl)." -ForegroundColor Green
+Write-Host "  [OK] Cleanly created '$DataDir', set Owner to Administrators, and locked Standard Users to Read-Only." -ForegroundColor Green
 
 # 5. Register Narrowly Restricted SYSTEM Scheduled Tasks with Full PowerShell Path
 Write-Host ""
@@ -226,15 +242,12 @@ $PsFullPath     = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.ex
 $Principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 $Settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
 
-# Task 1: DisableTouchscreen (Mouse Mode)
 $ActionDisable = New-ScheduledTaskAction -Execute $PsFullPath -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$WorkerScript`" -Action Disable"
 Register-ScheduledTask -TaskPath "$TaskFolderName\" -TaskName 'DisableTouchscreen' -Action $ActionDisable -Principal $Principal -Settings $Settings -Description 'Disables HID-compliant touch screen for Roblox Mouse Mode.' -Force | Out-Null
 
-# Task 2: EnableTouchscreen (Restore Touch)
 $ActionEnable = New-ScheduledTaskAction -Execute $PsFullPath -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$WorkerScript`" -Action Enable"
 Register-ScheduledTask -TaskPath "$TaskFolderName\" -TaskName 'EnableTouchscreen' -Action $ActionEnable -Principal $Principal -Settings $Settings -Description 'Re-enables HID-compliant touch screen for handheld touch operation.' -Force | Out-Null
 
-# Task 3: RestoreTouchOnBoot (Safety Fail-Safe at Windows Startup)
 $TriggerBoot = New-ScheduledTaskTrigger -AtStartup
 Register-ScheduledTask -TaskPath "$TaskFolderName\" -TaskName 'RestoreTouchOnBoot' -Action $ActionEnable -Trigger $TriggerBoot -Principal $Principal -Settings $Settings -Description 'Fail-safe: Automatically restores touchscreen at Windows startup.' -Force | Out-Null
 
@@ -248,7 +261,9 @@ try {
         $FolderSddl = $FolderSddl + '(A;;GRGX;;;AU)'
         $TaskFolder.SetSecurityDescriptor($FolderSddl, 0)
     }
-} catch { }
+} catch {
+    Write-Host "  [INFO] Task folder SDDL inherited default read access ($($_.Exception.Message))." -ForegroundColor Gray
+}
 
 foreach ($TaskName in @('DisableTouchscreen', 'EnableTouchscreen')) {
     $RegisteredTask = $TaskFolder.GetTask($TaskName)
@@ -316,6 +331,6 @@ Write-Host "====================================================================
 Write-Host "  - GUI App Installed : $ExeOutput"
 Write-Host "  - Desktop Shortcut  : Created on Public Desktop (available to your son's account)"
 Write-Host "  - Start Menu Folder : Start -> All Apps -> Roblox Touchscreen Switch"
-Write-Host "  - SYSTEM Audit Log  : $LogPath (Read-Only for Standard Users)"
+Write-Host "  - SYSTEM Audit Log  : $LogPath (Admin-Owned, Read-Only for Standard Users)"
 Write-Host "  - User GUI Log      : %LOCALAPPDATA%\RobloxTouchscreenSwitch\gui-activity.log"
 Write-Host ""

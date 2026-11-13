@@ -3,5 +3,6 @@
 *.pdb
 *.user
 *.tmp
+*.old.log
 Thumbs.db
 Desktop.ini

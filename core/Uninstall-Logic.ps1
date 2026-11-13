@@ -1,19 +1,24 @@
 <#
 .SYNOPSIS
-    Administrator Uninstaller for Roblox Touchscreen Switch v1.1.0 (Windows 11)
+    Administrator Uninstaller for Roblox Touchscreen Switch (Windows 11)
 .DESCRIPTION
     1. Automatically re-enables any disabled touchscreen device (Code 22) first so the handheld is never left with touch disabled.
     2. Removes the Scheduled Tasks and '\RobloxTouchscreenSwitch' task folder.
     3. Removes All-Users Desktop and Start Menu shortcuts.
-    4. Removes C:\Program Files\RobloxTouchscreenSwitch and optionally C:\ProgramData\RobloxTouchscreenSwitch.
+    4. Removes $env:ProgramFiles\RobloxTouchscreenSwitch and optionally $env:ProgramData\RobloxTouchscreenSwitch.
 #>
 [CmdletBinding()]
 param()
 
 $ErrorActionPreference = 'Continue'
 
+$ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$PackageRoot = Split-Path -Parent $ScriptRoot
+$VersionFile = Join-Path $PackageRoot 'VERSION'
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.0' }
+
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "  ROBLOX TOUCHSCREEN SWITCH v1.1.0 - ADMINISTRATOR UNINSTALLER" -ForegroundColor Cyan
+Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - ADMINISTRATOR UNINSTALLER" -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -23,7 +28,6 @@ if (-not $CurrentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
     exit 1
 }
 
-# 1. Safety First: Ensure Touchscreen is Re-Enabled before removing anything
 Write-Host "[1/4] Restoring touchscreen before uninstalling..." -ForegroundColor Yellow
 try {
     Import-Module PnpDevice -ErrorAction SilentlyContinue
@@ -43,10 +47,8 @@ try {
     Write-Host "  [WARN] Could not verify PnP state during uninstall: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
-# 2. Stop running GUI if open
 Get-Process -Name 'RobloxTouchSwitch' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-# 3. Remove Scheduled Tasks
 Write-Host ""
 Write-Host "[2/4] Removing Scheduled Tasks..." -ForegroundColor Yellow
 foreach ($TaskName in @('DisableTouchscreen', 'EnableTouchscreen', 'RestoreTouchOnBoot')) {
@@ -61,7 +63,6 @@ try {
     Write-Host "  [OK] Removed Scheduled Task folder '\RobloxTouchscreenSwitch'." -ForegroundColor Green
 } catch { }
 
-# 4. Remove Shortcuts & Program Files
 Write-Host ""
 Write-Host "[3/4] Removing Desktop and Start Menu Shortcuts..." -ForegroundColor Yellow
 $PublicDesktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
@@ -74,8 +75,8 @@ Write-Host "  [OK] Removed Public Desktop and Start Menu shortcuts." -Foreground
 
 Write-Host ""
 Write-Host "[4/4] Removing Application Files..." -ForegroundColor Yellow
-$InstallDir = 'C:\Program Files\RobloxTouchscreenSwitch'
-$DataDir    = 'C:\ProgramData\RobloxTouchscreenSwitch'
+$InstallDir = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch'
+$DataDir    = Join-Path $env:ProgramData  'RobloxTouchscreenSwitch'
 
 if (Test-Path -LiteralPath $InstallDir) {
     Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue

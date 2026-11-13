@@ -1,11 +1,12 @@
 @echo off
 setlocal EnableExtensions
-title Roblox Touchscreen Switch v1.1.0 - Administrator Uninstaller
+title Roblox Touchscreen Switch - Administrator Uninstaller
 
 net session >nul 2>&1
 if %errorLevel% neq 0 (
     echo Requesting Administrator privileges via Windows UAC...
-    "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    set "SELF_BAT=%~f0"
+    "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath $env:SELF_BAT -Verb RunAs"
     exit /b
 )
 

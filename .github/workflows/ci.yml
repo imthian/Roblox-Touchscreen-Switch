@@ -1,0 +1,46 @@
+name: CI - PSScriptAnalyzer & C# Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate-and-build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run PSScriptAnalyzer on PowerShell scripts
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+          $results = Invoke-ScriptAnalyzer -Path .\core, .\diagnostics -Recurse -Severity Error, Warning
+          if ($results) {
+            $results | Format-Table -AutoSize
+          }
+          $errors = $results | Where-Object { $_.Severity -eq 'Error' }
+          if ($errors) {
+            throw "PSScriptAnalyzer found $($errors.Count) error(s)."
+          }
+
+      - name: Compile C# WinForms GUI with .NET Framework csc.exe
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /target:winexe /optimize+ /out:RobloxTouchSwitch.exe `
+            /reference:System.dll `
+            /reference:System.Core.dll `
+            /reference:System.Drawing.dll `
+            /reference:System.Management.dll `
+            /reference:System.Runtime.Serialization.dll `
+            /reference:System.Xml.dll `
+            /reference:System.Windows.Forms.dll `
+            /win32icon:assets\RobloxTouchSwitch.ico `
+            core\RobloxTouchSwitchApp.cs
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path .\RobloxTouchSwitch.exe)) {
+            throw "C# compilation failed."
+          }
+          Write-Host "Successfully compiled RobloxTouchSwitch.exe ($((Get-Item .\RobloxTouchSwitch.exe).Length) bytes)"

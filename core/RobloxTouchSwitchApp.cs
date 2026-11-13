@@ -4,8 +4,9 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Management;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -19,15 +20,29 @@ namespace RobloxTouchscreenSwitch
         public uint ConfigManagerErrorCode { get; set; }
     }
 
+    [DataContract]
+    public class AppConfigData
+    {
+        [DataMember] public string AppName { get; set; }
+        [DataMember] public string Version { get; set; }
+        [DataMember] public string PinnedInstanceId { get; set; }
+        [DataMember] public string[] PinnedInstanceIds { get; set; }
+    }
+
+    [DataContract]
     public class WorkerStatusReport
     {
-        public long TimestampUtc { get; set; }
-        public string LastAction { get; set; }
-        public string ResultCode { get; set; }
-        public string TouchState { get; set; }
-        public int ErrorCode { get; set; }
-        public string InstanceId { get; set; }
-        public string Message { get; set; }
+        [DataMember] public string Version { get; set; }
+        [DataMember] public string Timestamp { get; set; }
+        [DataMember] public long TimestampUtc { get; set; }
+        [DataMember] public string LastAction { get; set; }
+        [DataMember] public string ResultCode { get; set; }
+        [DataMember] public string TouchState { get; set; }
+        [DataMember] public string DeviceStatus { get; set; }
+        [DataMember] public int ErrorCode { get; set; }
+        [DataMember] public string InstanceId { get; set; }
+        [DataMember] public int MatchedCount { get; set; }
+        [DataMember] public string Message { get; set; }
     }
 
     public class MainForm : Form
@@ -44,10 +59,12 @@ namespace RobloxTouchscreenSwitch
         private TextBox txtLogViewer;
         private Label lblFooterHint;
 
-        private readonly string SystemDataDir = @"C:\ProgramData\RobloxTouchscreenSwitch";
-        private readonly string SystemLogPath = @"C:\ProgramData\RobloxTouchscreenSwitch\system-activity.log";
-        private readonly string StatusPath    = @"C:\ProgramData\RobloxTouchscreenSwitch\status.json";
-        private readonly string ConfigPath    = @"C:\Program Files\RobloxTouchscreenSwitch\config.json";
+        private readonly string InstallDir;
+        private readonly string SystemDataDir;
+        private readonly string SystemLogPath;
+        private readonly string StatusPath;
+        private readonly string ConfigPath;
+        private readonly string AppVersion;
 
         private readonly string UserDataDir;
         private readonly string UserLogPath;
@@ -59,12 +76,21 @@ namespace RobloxTouchscreenSwitch
 
         public MainForm(string[] args)
         {
+            InstallDir    = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "RobloxTouchscreenSwitch");
+            SystemDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RobloxTouchscreenSwitch");
+            SystemLogPath = Path.Combine(SystemDataDir, "system-activity.log");
+            StatusPath    = Path.Combine(SystemDataDir, "status.json");
+            ConfigPath    = Path.Combine(InstallDir, "config.json");
+
+            string verFile = Path.Combine(InstallDir, "VERSION");
+            AppVersion = File.Exists(verFile) ? File.ReadAllText(verFile, Encoding.UTF8).Trim() : "1.2.0";
+
             UserDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RobloxTouchscreenSwitch");
             UserLogPath = Path.Combine(UserDataDir, "gui-activity.log");
 
             InitializeComponent();
             EnsureUserDir();
-            AppendUserLog("INFO", "Roblox Touchscreen Switch GUI v1.1.0 launched by user '" + Environment.UserName + "'.");
+            AppendUserLog("INFO", "Roblox Touchscreen Switch GUI v" + AppVersion + " launched by user '" + Environment.UserName + "'.");
             RefreshDeviceStateAndLogs();
 
             if (args != null && args.Length > 0)
@@ -83,7 +109,7 @@ namespace RobloxTouchscreenSwitch
 
         private void InitializeComponent()
         {
-            this.Text = "Roblox Touchscreen Switch v1.1.0";
+            this.Text = "Roblox Touchscreen Switch v" + AppVersion;
             this.Size = new Size(760, 620);
             this.MinimumSize = new Size(680, 560);
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -93,13 +119,12 @@ namespace RobloxTouchscreenSwitch
             this.KeyPreview = true;
             this.KeyDown += MainForm_KeyDown;
 
-            string icoPath = @"C:\Program Files\RobloxTouchscreenSwitch\RobloxTouchSwitch.ico";
+            string icoPath = Path.Combine(InstallDir, "RobloxTouchSwitch.ico");
             if (File.Exists(icoPath))
             {
                 try { this.Icon = new Icon(icoPath); } catch { }
             }
 
-            // Top Title & Status Banner
             headerBanner = new Panel();
             headerBanner.Dock = DockStyle.Top;
             headerBanner.Height = 128;
@@ -107,7 +132,7 @@ namespace RobloxTouchscreenSwitch
             headerBanner.BackColor = Color.FromArgb(30, 41, 59);
 
             lblAppTitle = new Label();
-            lblAppTitle.Text = "ROBLOX TOUCHSCREEN SWITCH v1.1.0  -  HANDHELD INPUT CONTROLLER";
+            lblAppTitle.Text = "ROBLOX TOUCHSCREEN SWITCH v" + AppVersion + "  -  HANDHELD INPUT CONTROLLER";
             lblAppTitle.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
             lblAppTitle.ForeColor = Color.FromArgb(148, 163, 184);
             lblAppTitle.AutoSize = false;
@@ -135,7 +160,6 @@ namespace RobloxTouchscreenSwitch
             headerBanner.Controls.Add(lblStatusTitle);
             headerBanner.Controls.Add(lblAppTitle);
 
-            // Center Main Layout Table
             TableLayoutPanel mainLayout = new TableLayoutPanel();
             mainLayout.Dock = DockStyle.Fill;
             mainLayout.Padding = new Padding(20, 18, 20, 14);
@@ -148,7 +172,6 @@ namespace RobloxTouchscreenSwitch
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
 
-            // Large Button 1: MOUSE MODE (Pure BMP/ASCII symbols for 100% GDI+ font rendering reliability)
             btnMouseMode = new Button();
             btnMouseMode.Dock = DockStyle.Fill;
             btnMouseMode.Margin = new Padding(0, 0, 10, 12);
@@ -167,7 +190,6 @@ namespace RobloxTouchscreenSwitch
                 await TriggerScheduledTaskAsync(TaskDisable, "MOUSE MODE (Disable Touchscreen)");
             };
 
-            // Large Button 2: RESTORE TOUCH
             btnRestoreTouch = new Button();
             btnRestoreTouch.Dock = DockStyle.Fill;
             btnRestoreTouch.Margin = new Padding(10, 0, 0, 12);
@@ -186,7 +208,6 @@ namespace RobloxTouchscreenSwitch
                 await TriggerScheduledTaskAsync(TaskEnable, "RESTORE TOUCH (Enable Touchscreen)");
             };
 
-            // Utility Toolbar Panel
             FlowLayoutPanel toolbarPanel = new FlowLayoutPanel();
             toolbarPanel.Dock = DockStyle.Fill;
             toolbarPanel.FlowDirection = FlowDirection.LeftToRight;
@@ -245,7 +266,6 @@ namespace RobloxTouchscreenSwitch
             toolbarPanel.Controls.Add(btnOpenSystemLog);
             toolbarPanel.Controls.Add(btnOpenUserLog);
 
-            // Activity Log Textbox
             txtLogViewer = new TextBox();
             txtLogViewer.Multiline = true;
             txtLogViewer.ReadOnly = true;
@@ -257,7 +277,6 @@ namespace RobloxTouchscreenSwitch
             txtLogViewer.BorderStyle = BorderStyle.FixedSingle;
             txtLogViewer.TabStop = false;
 
-            // Footer Hint
             lblFooterHint = new Label();
             lblFooterHint.Dock = DockStyle.Fill;
             lblFooterHint.Text = "Safe Chords (Window Focused Only): [Ctrl+Alt+Shift+M] = Mouse Mode  |  [Ctrl+Alt+Shift+T] = Restore Touch  |  [Ctrl+Alt+Shift+R] = Refresh";
@@ -336,6 +355,16 @@ namespace RobloxTouchscreenSwitch
         {
             try
             {
+                if (File.Exists(UserLogPath))
+                {
+                    FileInfo fi = new FileInfo(UserLogPath);
+                    if (fi.Length > 524288)
+                    {
+                        string oldPath = Path.Combine(UserDataDir, "gui-activity.old.log");
+                        if (File.Exists(oldPath)) File.Delete(oldPath);
+                        File.Move(UserLogPath, oldPath);
+                    }
+                }
                 string line = string.Format("[{0}] [GUI:{1}] [{2}] {3}{4}",
                     DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                     Environment.UserName,
@@ -347,36 +376,37 @@ namespace RobloxTouchscreenSwitch
             catch { }
         }
 
-        private string GetPinnedInstanceId()
+        private List<string> GetPinnedInstanceIds()
         {
+            List<string> pins = new List<string>();
             try
             {
                 if (File.Exists(ConfigPath))
                 {
-                    string json = File.ReadAllText(ConfigPath, Encoding.UTF8);
-                    Match m = Regex.Match(json, "\"PinnedInstanceId\"\\s*:\\s*\"([^\"]*)\"");
-                    if (m.Success && !string.IsNullOrWhiteSpace(m.Groups[1].Value))
+                    byte[] bytes = File.ReadAllBytes(ConfigPath);
+                    DataContractJsonSerializer ser = new DataContractJsonSerializer(typeof(AppConfigData));
+                    using (MemoryStream ms = new MemoryStream(bytes))
                     {
-                        return m.Groups[1].Value.Trim();
+                        AppConfigData cfg = ser.ReadObject(ms) as AppConfigData;
+                        if (cfg != null)
+                        {
+                            if (cfg.PinnedInstanceIds != null)
+                            {
+                                foreach (string s in cfg.PinnedInstanceIds)
+                                {
+                                    if (!string.IsNullOrWhiteSpace(s)) pins.Add(s.Trim());
+                                }
+                            }
+                            if (pins.Count == 0 && !string.IsNullOrWhiteSpace(cfg.PinnedInstanceId))
+                            {
+                                pins.Add(cfg.PinnedInstanceId.Trim());
+                            }
+                        }
                     }
                 }
             }
             catch { }
-            return null;
-        }
-
-        private string ExtractJsonString(string json, string key)
-        {
-            Match m = Regex.Match(json, "\"" + key + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
-            return m.Success ? Regex.Unescape(m.Groups[1].Value) : "";
-        }
-
-        private long ExtractJsonLong(string json, string key)
-        {
-            Match m = Regex.Match(json, "\"" + key + "\"\\s*:\\s*(-?\\d+)");
-            long val = 0;
-            if (m.Success) long.TryParse(m.Groups[1].Value, out val);
-            return val;
+            return pins;
         }
 
         private WorkerStatusReport ReadStatusReport()
@@ -385,27 +415,23 @@ namespace RobloxTouchscreenSwitch
             {
                 if (File.Exists(StatusPath))
                 {
-                    string json = File.ReadAllText(StatusPath, Encoding.UTF8);
-                    return new WorkerStatusReport
+                    byte[] bytes = File.ReadAllBytes(StatusPath);
+                    DataContractJsonSerializer ser = new DataContractJsonSerializer(typeof(WorkerStatusReport));
+                    using (MemoryStream ms = new MemoryStream(bytes))
                     {
-                        TimestampUtc = ExtractJsonLong(json, "TimestampUtc"),
-                        LastAction   = ExtractJsonString(json, "LastAction"),
-                        ResultCode   = ExtractJsonString(json, "ResultCode"),
-                        TouchState   = ExtractJsonString(json, "TouchState"),
-                        ErrorCode    = (int)ExtractJsonLong(json, "ErrorCode"),
-                        InstanceId   = ExtractJsonString(json, "InstanceId"),
-                        Message      = ExtractJsonString(json, "Message")
-                    };
+                        return ser.ReadObject(ms) as WorkerStatusReport;
+                    }
                 }
             }
             catch { }
             return null;
         }
 
-        // Unified Device Discovery Rule (Matches SYSTEM Worker 100%: PNPClass='HIDClass' AND (FriendlyName='HID-compliant touch screen' OR HID_DEVICE_UP:000D_U:0004))
-        private List<TouchDeviceRecord> QueryTouchDevices()
+        // Queries all present HID touchscreens; also returns whether a pinned device is missing
+        private List<TouchDeviceRecord> QueryTouchDevices(out List<string> missingPins)
         {
-            List<TouchDeviceRecord> list = new List<TouchDeviceRecord>();
+            missingPins = new List<string>();
+            List<TouchDeviceRecord> allMatched = new List<TouchDeviceRecord>();
             try
             {
                 using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
@@ -458,7 +484,7 @@ namespace RobloxTouchscreenSwitch
                                     ? Convert.ToUInt32(obj["ConfigManagerErrorCode"])
                                     : 0u
                             };
-                            list.Add(rec);
+                            allMatched.Add(rec);
                         }
                     }
                 }
@@ -468,58 +494,126 @@ namespace RobloxTouchscreenSwitch
                 AppendUserLog("WARN", "WMI query warning: " + ex.Message);
             }
 
-            string pinned = GetPinnedInstanceId();
-            if (!string.IsNullOrEmpty(pinned))
+            List<string> pinnedIds = GetPinnedInstanceIds();
+            if (pinnedIds.Count > 0)
             {
-                List<TouchDeviceRecord> filtered = list.FindAll(d => string.Equals(d.DeviceID, pinned, StringComparison.OrdinalIgnoreCase));
-                if (filtered.Count == 1)
+                List<TouchDeviceRecord> targetList = new List<TouchDeviceRecord>();
+                foreach (string pin in pinnedIds)
                 {
-                    return filtered;
+                    TouchDeviceRecord found = allMatched.Find(d => string.Equals(d.DeviceID, pin, StringComparison.OrdinalIgnoreCase));
+                    if (found != null)
+                    {
+                        targetList.Add(found);
+                    }
+                    else
+                    {
+                        missingPins.Add(pin);
+                    }
                 }
+                return targetList;
             }
-            return list;
+            return allMatched;
         }
 
         private void RefreshDeviceStateAndLogs()
         {
-            List<TouchDeviceRecord> devices = QueryTouchDevices();
+            List<string> missingPins;
+            List<TouchDeviceRecord> devices = QueryTouchDevices(out missingPins);
+            List<string> configuredPins = GetPinnedInstanceIds();
 
-            if (devices.Count == 0)
+            if (missingPins.Count > 0)
+            {
+                headerBanner.BackColor = Color.FromArgb(153, 27, 27);
+                lblStatusTitle.Text = "[!] PINNED TOUCHSCREEN DISCONNECTED";
+                lblStatusSubtitle.Text = "Admin-pinned device (" + string.Join("; ", missingPins.ToArray()) + ") is missing. Refusing to guess other devices.";
+            }
+            else if (devices.Count == 0)
             {
                 headerBanner.BackColor = Color.FromArgb(153, 27, 27);
                 lblStatusTitle.Text = "[!] TOUCHSCREEN DEVICE NOT FOUND";
                 lblStatusSubtitle.Text = "No touchscreen (HID Usage 000D:0004) was detected in Device Manager. Check driver status or run Recovery.";
             }
-            else if (devices.Count > 1)
+            else if (devices.Count > 1 && configuredPins.Count == 0)
             {
                 headerBanner.BackColor = Color.FromArgb(180, 83, 9);
                 lblStatusTitle.Text = "[!] MULTIPLE TOUCHSCREENS FOUND (" + devices.Count + ") - ADMIN REQUIRED";
-                lblStatusSubtitle.Text = "Safeguard active: Refusing to guess between multiple HID touch devices. Administrator intervention required.";
+                lblStatusSubtitle.Text = "Safeguard active: Re-run Install-RobloxTouchSwitch.bat as Administrator to pin the touchscreen node(s).";
             }
             else
             {
-                TouchDeviceRecord dev = devices[0];
-                if (dev.ConfigManagerErrorCode == 22)
+                bool allCode22 = true;
+                bool allOk = true;
+                uint firstFaultCode = 0;
+                string firstFaultStatus = "";
+                List<string> idList = new List<string>();
+
+                foreach (TouchDeviceRecord dev in devices)
+                {
+                    idList.Add(dev.DeviceID);
+                    if (dev.ConfigManagerErrorCode != 22) allCode22 = false;
+                    if (dev.ConfigManagerErrorCode != 0 || !string.Equals(dev.Status, "OK", StringComparison.OrdinalIgnoreCase))
+                    {
+                        allOk = false;
+                        if (dev.ConfigManagerErrorCode != 22 && firstFaultCode == 0)
+                        {
+                            firstFaultCode = dev.ConfigManagerErrorCode;
+                            firstFaultStatus = dev.Status;
+                        }
+                    }
+                }
+
+                string idSummary = string.Join("; ", idList.ToArray());
+
+                if (allCode22)
                 {
                     headerBanner.BackColor = Color.FromArgb(3, 105, 161);
                     lblStatusTitle.Text = "MOUSE MODE ACTIVE  (TOUCHSCREEN OFF)";
-                    lblStatusSubtitle.Text = "Ready for Roblox (Fling Things and People). External mouse clicks & grabbing work normally. [" + dev.DeviceID + "]";
+                    lblStatusSubtitle.Text = "Ready for Roblox (Fling Things and People). External mouse clicks & grabbing work normally. [" + idSummary + "]";
                 }
-                else if (dev.ConfigManagerErrorCode == 0 && string.Equals(dev.Status, "OK", StringComparison.OrdinalIgnoreCase))
+                else if (allOk)
                 {
                     headerBanner.BackColor = Color.FromArgb(21, 128, 61);
                     lblStatusTitle.Text = "TOUCHSCREEN ENABLED  (NORMAL HANDHELD MODE)";
-                    lblStatusSubtitle.Text = "Touchscreen is ON and working normally. Click MOUSE MODE before playing Roblox with an external mouse. [" + dev.DeviceID + "]";
+                    lblStatusSubtitle.Text = "Touchscreen is ON and working normally. Click MOUSE MODE before playing Roblox with an external mouse. [" + idSummary + "]";
                 }
                 else
                 {
                     headerBanner.BackColor = Color.FromArgb(180, 83, 9);
-                    lblStatusTitle.Text = "[!] TOUCHSCREEN DRIVER ERROR (CODE " + dev.ConfigManagerErrorCode + ")";
-                    lblStatusSubtitle.Text = "Device status is '" + dev.Status + "' (Error Code " + dev.ConfigManagerErrorCode + "). Click RESTORE TOUCH or run Emergency Recovery. [" + dev.DeviceID + "]";
+                    lblStatusTitle.Text = "[!] TOUCHSCREEN DRIVER ERROR (CODE " + firstFaultCode + ")";
+                    lblStatusSubtitle.Text = "Device status is '" + firstFaultStatus + "' (Error Code " + firstFaultCode + "). Click RESTORE TOUCH or run Emergency Recovery. [" + idSummary + "]";
                 }
             }
 
             LoadCombinedLogs();
+        }
+
+        private List<string> ReadTailLines(string filePath, int maxBytes, int maxLines)
+        {
+            List<string> result = new List<string>();
+            if (!File.Exists(filePath)) return result;
+            try
+            {
+                using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    long startPos = Math.Max(0, fs.Length - maxBytes);
+                    fs.Seek(startPos, SeekOrigin.Begin);
+                    using (StreamReader sr = new StreamReader(fs, Encoding.UTF8))
+                    {
+                        if (startPos > 0) sr.ReadLine(); // discard partial first line
+                        string line;
+                        while ((line = sr.ReadLine()) != null)
+                        {
+                            if (!string.IsNullOrWhiteSpace(line)) result.Add(line);
+                        }
+                    }
+                }
+                if (result.Count > maxLines)
+                {
+                    result = result.GetRange(result.Count - maxLines, maxLines);
+                }
+            }
+            catch { }
+            return result;
         }
 
         private void LoadCombinedLogs()
@@ -527,18 +621,8 @@ namespace RobloxTouchscreenSwitch
             try
             {
                 List<string> combined = new List<string>();
-                if (File.Exists(SystemLogPath))
-                {
-                    string[] sysLines = File.ReadAllLines(SystemLogPath, Encoding.UTF8);
-                    int startSys = Math.Max(0, sysLines.Length - 50);
-                    for (int i = startSys; i < sysLines.Length; i++) combined.Add(sysLines[i]);
-                }
-                if (File.Exists(UserLogPath))
-                {
-                    string[] usrLines = File.ReadAllLines(UserLogPath, Encoding.UTF8);
-                    int startUsr = Math.Max(0, usrLines.Length - 30);
-                    for (int i = startUsr; i < usrLines.Length; i++) combined.Add(usrLines[i]);
-                }
+                combined.AddRange(ReadTailLines(SystemLogPath, 32768, 50));
+                combined.AddRange(ReadTailLines(UserLogPath, 32768, 30));
                 combined.Sort(StringComparer.Ordinal);
 
                 if (combined.Count > 0)
@@ -568,7 +652,26 @@ namespace RobloxTouchscreenSwitch
         {
             if (isBusy) return;
 
-            List<TouchDeviceRecord> preCheck = QueryTouchDevices();
+            List<string> missingPins;
+            List<TouchDeviceRecord> preCheck = QueryTouchDevices(out missingPins);
+            List<string> configuredPins = GetPinnedInstanceIds();
+
+            if (missingPins.Count > 0)
+            {
+                string missStr = string.Join("; ", missingPins.ToArray());
+                AppendUserLog("ERROR", "Safeguard halted '" + friendlyActionName + "': Pinned touchscreen '" + missStr + "' is missing.");
+                RefreshDeviceStateAndLogs();
+                MessageBox.Show(
+                    "PINNED DEVICE MISSING:\r\n\r\n" +
+                    "The Administrator pinned touchscreen device:\r\n" + missStr + "\r\n\r\n" +
+                    "However, this device is not currently connected. To protect external monitors or other HID devices, Roblox Touchscreen Switch will never fall back to guessing.\r\n\r\n" +
+                    "Reconnect the device or ask an Administrator to re-run Install-RobloxTouchSwitch.bat.",
+                    "Pinned Touchscreen Not Found",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
+            }
+
             if (preCheck.Count == 0)
             {
                 AppendUserLog("ERROR", "Attempted '" + friendlyActionName + "', but no touchscreen device (HID 000D:0004) was found in Device Manager.");
@@ -585,17 +688,17 @@ namespace RobloxTouchscreenSwitch
                 return;
             }
 
-            if (preCheck.Count > 1)
+            if (preCheck.Count > 1 && configuredPins.Count == 0)
             {
                 StringBuilder ids = new StringBuilder();
                 foreach (var d in preCheck) ids.AppendLine(" - " + d.DeviceID + " (Status: " + d.Status + ", Code: " + d.ConfigManagerErrorCode + ")");
-                AppendUserLog("ERROR", "Safeguard halted '" + friendlyActionName + "': Multiple (" + preCheck.Count + ") matching touchscreen devices found.");
+                AppendUserLog("ERROR", "Safeguard halted '" + friendlyActionName + "': Multiple (" + preCheck.Count + ") unpinned touchscreen devices found.");
                 RefreshDeviceStateAndLogs();
                 MessageBox.Show(
                     "SAFETY STOP: Multiple (" + preCheck.Count + ") touchscreen devices were detected:\r\n\r\n" +
                     ids.ToString() + "\r\n" +
-                    "To protect your system, Roblox Touchscreen Switch will never guess or disable unrelated HID devices.\r\n\r\n" +
-                    "Please ask the Administrator to re-run Install-RobloxTouchSwitch.bat to pin the exact hardware InstanceId in config.json.",
+                    "To protect your system, Roblox Touchscreen Switch will never guess which HID devices to disable.\r\n\r\n" +
+                    "Please ask the Administrator to re-run Install-RobloxTouchSwitch.bat to pin the touchscreen InstanceId(s) in config.json.",
                     "Administrator Intervention Required",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
@@ -654,9 +757,8 @@ namespace RobloxTouchscreenSwitch
                 }
                 else
                 {
-                    // Poll status.json (written by the SYSTEM worker) and live device state for up to 4.5 seconds
                     WorkerStatusReport updatedReport = null;
-                    for (int attempt = 0; attempt < 15; attempt++)
+                    for (int attempt = 0; attempt < 18; attempt++)
                     {
                         await Task.Delay(300);
                         WorkerStatusReport candidate = ReadStatusReport();
@@ -667,22 +769,29 @@ namespace RobloxTouchscreenSwitch
                         }
                     }
 
-                    if (updatedReport != null)
+                    if (updatedReport == null)
                     {
-                        if (!string.Equals(updatedReport.ResultCode, "SUCCESS", StringComparison.OrdinalIgnoreCase))
-                        {
-                            AppendUserLog("ERROR", "SYSTEM worker reported " + updatedReport.ResultCode + ": " + updatedReport.Message);
-                            MessageBox.Show(
-                                "The SYSTEM worker reported an issue (" + updatedReport.ResultCode + "):\r\n\r\n" +
-                                updatedReport.Message,
-                                "Roblox Touchscreen Switch - Hardware Alert",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Warning);
-                        }
-                        else
-                        {
-                            AppendUserLog("INFO", "SYSTEM worker confirmed " + updatedReport.TouchState + " for " + updatedReport.InstanceId + ".");
-                        }
+                        AppendUserLog("WARN", "SYSTEM worker did not write an updated status.json within 5.4 seconds for '" + taskFullName + "'.");
+                        MessageBox.Show(
+                            "The Scheduled Task was triggered, but the SYSTEM worker did not report back to status.json within 5.4 seconds.\r\n\r\n" +
+                            "Please click 'Open SYSTEM Audit Log' or ask an Administrator to run 'Run-Compatibility-Check.bat' to verify the installation.",
+                            "Worker Did Not Report Back",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                    }
+                    else if (!string.Equals(updatedReport.ResultCode, "SUCCESS", StringComparison.OrdinalIgnoreCase))
+                    {
+                        AppendUserLog("ERROR", "SYSTEM worker reported " + updatedReport.ResultCode + ": " + updatedReport.Message);
+                        MessageBox.Show(
+                            "The SYSTEM worker reported an issue (" + updatedReport.ResultCode + "):\r\n\r\n" +
+                            updatedReport.Message,
+                            "Roblox Touchscreen Switch - Hardware Alert",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                    }
+                    else
+                    {
+                        AppendUserLog("INFO", "SYSTEM worker confirmed " + updatedReport.TouchState + " for " + updatedReport.InstanceId + ".");
                     }
                 }
             }

@@ -1,24 +1,26 @@
 <#
 .SYNOPSIS
-    Roblox Touchscreen Switch v1.1.0 - Protected SYSTEM Worker Script
+    Roblox Touchscreen Switch - Protected SYSTEM Worker Script
 .DESCRIPTION
     Executes strictly under NT AUTHORITY\SYSTEM via Windows Scheduled Tasks:
       - \RobloxTouchscreenSwitch\DisableTouchscreen (Mouse Mode)
       - \RobloxTouchscreenSwitch\EnableTouchscreen  (Restore Touch)
       - \RobloxTouchscreenSwitch\RestoreTouchOnBoot (Safety Startup Recovery)
 
-    SECURITY & HARDWARE SAFEGUARDS (v1.1.0):
-    1. Located in C:\Program Files\RobloxTouchscreenSwitch\ (Read/Execute only for Standard Users;
-       Full Control restricted to SYSTEM and Administrators).
-    2. Writes audit logs and status.json ONLY to C:\ProgramData\RobloxTouchscreenSwitch\, which is
-       locked via NTFS ACLs to FullControl for SYSTEM/Administrators and Read-Only for Standard Users
-       (preventing symlink/junction redirection attacks or audit log forgery).
-    3. Refuses to write if C:\ProgramData\RobloxTouchscreenSwitch or its target files have ReparsePoint attributes.
-    4. Matches touchscreens across ALL Windows locales using HID Usage Page 0x000D / Usage 0x0004
-       ('HID_DEVICE_UP:000D_U:0004') OR English FriendlyName 'HID-compliant touch screen' inside PNPClass 'HIDClass',
-       filtered strictly to Present/connected devices via Win32_PnPEntity (identical to the GUI).
-    5. Treats ONLY ConfigManagerErrorCode == 22 as intentionally Disabled (Mouse Mode), flagging any
-       non-zero, non-22 error code as a hardware/driver error.
+    SECURITY & RELIABILITY ARCHITECTURE (v1.2.0):
+    1. Dynamic Environment Paths: Uses $env:ProgramFiles and $env:ProgramData (never hardcoded C:\).
+    2. Pre-Creation Takeover & Hardlink Defense:
+       - If DataDir ($env:ProgramData\RobloxTouchscreenSwitch) is missing or has an untrusted owner
+         (anything other than SYSTEM S-1-5-18 or Administrators S-1-5-32-544) or is a ReparsePoint,
+         rebuilds and locks it with SetOwner(Administrators) + SYSTEM/Admin FullControl and Users Read-Only.
+       - Checks both ReparsePoint AND NTFS Hardlink link-count (via fsutil hardlink list) before writing.
+    3. Log Rotation: Caps system-activity.log at 512 KB (rotates to system-activity.old.log).
+    4. Strict Pinned-Device Array Enforcement (No Fallback Guessing):
+       - Supports PinnedInstanceIds (array of 1 or more composite touch nodes).
+       - If PinnedInstanceIds is configured by the Administrator and ANY pinned device is missing,
+         immediately stops with ERR_PINNED_MISSING (exit 15) instead of falling back to general matching.
+    5. 2.5-Second State Transition Polling: Polls up to 10 times (250 ms intervals) after Disable/Enable-PnpDevice.
+    6. Top-Level Exception Wrapper: Guarantees status.json is written on every failure path.
 #>
 [CmdletBinding()]
 param(
@@ -28,21 +30,55 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AppVersion = '1.1.0'
 
-$InstallDir = 'C:\Program Files\RobloxTouchscreenSwitch'
-$ConfigPath = Join-Path $InstallDir 'config.json'
-$DataDir    = 'C:\ProgramData\RobloxTouchscreenSwitch'
-$StatusPath = Join-Path $DataDir 'status.json'
-$LogPath    = Join-Path $DataDir 'system-activity.log'
+$InstallDir  = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch'
+$VersionFile = Join-Path $InstallDir 'VERSION'
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.0' }
+$ConfigPath  = Join-Path $InstallDir 'config.json'
+$DataDir     = Join-Path $env:ProgramData 'RobloxTouchscreenSwitch'
+$StatusPath  = Join-Path $DataDir 'status.json'
+$LogPath     = Join-Path $DataDir 'system-activity.log'
+$OldLogPath  = Join-Path $DataDir 'system-activity.old.log'
 
-# Ensure DataDir exists and verify it is NOT a symlink/junction (ReparsePoint defense-in-depth)
-if (-not (Test-Path -LiteralPath $DataDir)) {
-    New-Item -Path $DataDir -ItemType Directory -Force | Out-Null
-}
-$DirItem = Get-Item -LiteralPath $DataDir -Force
-if (($DirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-    throw "SECURITY ABORT: '$DataDir' is a ReparsePoint (symlink/junction). Refusing to write as SYSTEM."
+$SidSystem = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
+$SidAdmins = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+$SidUsers  = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')
+
+function Initialize-LockedDataDir {
+    $NeedsRebuild = $false
+    if (-not (Test-Path -LiteralPath $DataDir)) {
+        $NeedsRebuild = $true
+    } else {
+        $Item = Get-Item -LiteralPath $DataDir -Force
+        if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "SECURITY ABORT: '$DataDir' is a ReparsePoint (symlink/junction)."
+        }
+        $CurrentAcl = Get-Acl -LiteralPath $DataDir
+        $OwnerSid = $CurrentAcl.GetOwner([System.Security.Principal.SecurityIdentifier])
+        if ($OwnerSid -ne $SidSystem -and $OwnerSid -ne $SidAdmins) {
+            $NeedsRebuild = $true
+        }
+    }
+
+    if ($NeedsRebuild) {
+        if (Test-Path -LiteralPath $DataDir) {
+            Remove-Item -LiteralPath $DataDir -Recurse -Force
+        }
+        New-Item -Path $DataDir -ItemType Directory -Force | Out-Null
+        $InheritFlags = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+        $PropFlags    = [System.Security.AccessControl.PropagationFlags]::None
+        $RuleSystem = New-Object System.Security.AccessControl.FileSystemAccessRule($SidSystem, [System.Security.AccessControl.FileSystemRights]::FullControl, $InheritFlags, $PropFlags, [System.Security.AccessControl.AccessControlType]::Allow)
+        $RuleAdmins = New-Object System.Security.AccessControl.FileSystemAccessRule($SidAdmins, [System.Security.AccessControl.FileSystemRights]::FullControl, $InheritFlags, $PropFlags, [System.Security.AccessControl.AccessControlType]::Allow)
+        $RuleUsers  = New-Object System.Security.AccessControl.FileSystemAccessRule($SidUsers,  [System.Security.AccessControl.FileSystemRights]::ReadAndExecute, $InheritFlags, $PropFlags, [System.Security.AccessControl.AccessControlType]::Allow)
+
+        $DataAcl = New-Object System.Security.AccessControl.DirectorySecurity
+        $DataAcl.SetOwner($SidAdmins)
+        $DataAcl.SetAccessRuleProtection($true, $false)
+        $DataAcl.AddAccessRule($RuleSystem)
+        $DataAcl.AddAccessRule($RuleAdmins)
+        $DataAcl.AddAccessRule($RuleUsers)
+        Set-Acl -LiteralPath $DataDir -AclObject $DataAcl
+    }
 }
 
 function Test-SafeTargetFile {
@@ -50,7 +86,21 @@ function Test-SafeTargetFile {
     if (Test-Path -LiteralPath $FilePath) {
         $Item = Get-Item -LiteralPath $FilePath -Force
         if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "SECURITY ABORT: '$FilePath' is a ReparsePoint. Refusing to write as SYSTEM."
+            throw "SECURITY ABORT: '$FilePath' is a ReparsePoint."
+        }
+        $FileAcl = Get-Acl -LiteralPath $FilePath
+        $FileOwner = $FileAcl.GetOwner([System.Security.Principal.SecurityIdentifier])
+        if ($FileOwner -ne $SidSystem -and $FileOwner -ne $SidAdmins) {
+            Remove-Item -LiteralPath $FilePath -Force
+            return
+        }
+        $FsUtil = Join-Path $env:SystemRoot 'System32\fsutil.exe'
+        if (Test-Path -LiteralPath $FsUtil) {
+            $Links = & $FsUtil hardlink list "$FilePath" 2>$null
+            if ($Links -and @($Links).Count -gt 1) {
+                Remove-Item -LiteralPath $FilePath -Force
+                throw "SECURITY ABORT: '$FilePath' had multiple NTFS hardlinks and was removed."
+            }
         }
     }
 }
@@ -64,6 +114,13 @@ function Write-SystemLog {
     $Line = "[$Timestamp] [SYSTEM:$Action] [$Level] $Message"
     try {
         Test-SafeTargetFile -FilePath $LogPath
+        if (Test-Path -LiteralPath $LogPath) {
+            $Len = (Get-Item -LiteralPath $LogPath -Force).Length
+            if ($Len -gt 524288) {
+                Test-SafeTargetFile -FilePath $OldLogPath
+                Move-Item -LiteralPath $LogPath -Destination $OldLogPath -Force
+            }
+        }
         Add-Content -LiteralPath $LogPath -Value $Line -Encoding UTF8 -ErrorAction SilentlyContinue
     } catch { }
 }
@@ -104,30 +161,35 @@ function Save-StateReport {
     }
 }
 
-Write-SystemLog -Level 'INFO' -Message "Starting scheduled action '$Action' (v$AppVersion) on $env:COMPUTERNAME."
+# Top-level try/catch guarantees that EVERY failure path writes a status report to status.json
+try {
+    Initialize-LockedDataDir
+    Write-SystemLog -Level 'INFO' -Message "Starting scheduled action '$Action' (v$AppVersion) on $env:COMPUTERNAME."
 
-# Load optional Admin-pinned InstanceId from protected Program Files config.json
-$PinnedInstanceId = $null
-if (Test-Path -LiteralPath $ConfigPath) {
-    try {
-        $Cfg = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($Cfg.PinnedInstanceId -and $Cfg.PinnedInstanceId.Trim().Length -gt 0) {
-            $PinnedInstanceId = $Cfg.PinnedInstanceId.Trim()
+    # Read optional Admin-pinned InstanceId(s) from protected Program Files config.json
+    $PinnedIds = @()
+    if (Test-Path -LiteralPath $ConfigPath) {
+        try {
+            $Cfg = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($Cfg.PinnedInstanceIds) {
+                foreach ($id in $Cfg.PinnedInstanceIds) {
+                    if ($id -and $id.ToString().Trim().Length -gt 0) {
+                        $PinnedIds += $id.ToString().Trim()
+                    }
+                }
+            }
+            elseif ($Cfg.PinnedInstanceId -and $Cfg.PinnedInstanceId.ToString().Trim().Length -gt 0) {
+                $PinnedIds += $Cfg.PinnedInstanceId.ToString().Trim()
+            }
+        } catch {
+            Write-SystemLog -Level 'WARN' -Message "Failed to parse config.json: $($_.Exception.Message)"
         }
-    } catch {
-        Write-SystemLog -Level 'WARN' -Message "Failed to parse config.json: $($_.Exception.Message)"
     }
-}
 
-# Unified Device Discovery Rule (Matches both English FriendlyName AND locale-independent HID Usage Page 0x000D Usage 0x0004)
-function Get-MatchingTouchDevices {
-    param([string]$PinnedId)
-
-    $WmiDevices = @(Get-CimInstance -Namespace 'root\CIMV2' -ClassName 'Win32_PnPEntity' -Filter "PNPClass = 'HIDClass'" -ErrorAction SilentlyContinue)
-    $Matched = @()
-
+    # Query WMI/CIM for HIDClass devices (with explicit error handling instead of SilentlyContinue)
+    $WmiDevices = @(Get-CimInstance -Namespace 'root\CIMV2' -ClassName 'Win32_PnPEntity' -Filter "PNPClass = 'HIDClass'" -ErrorAction Stop)
+    $AllTouchMatched = @()
     foreach ($dev in $WmiDevices) {
-        # Win32_PnPEntity retrieved from live CIM enumerates currently present PnP nodes
         $IsTouchName = ($dev.Name -eq 'HID-compliant touch screen')
         $IsTouchUsage = $false
         if ($dev.HardwareID) {
@@ -140,108 +202,147 @@ function Get-MatchingTouchDevices {
                 if ($id -imatch 'HID_DEVICE_UP:000D_U:0004') { $IsTouchUsage = $true; break }
             }
         }
-
         if ($IsTouchName -or $IsTouchUsage) {
-            $Matched += $dev
+            $AllTouchMatched += $dev
         }
     }
 
-    if ($PinnedId) {
-        $PinnedMatches = @($Matched | Where-Object { $_.DeviceID -ieq $PinnedId })
-        if ($PinnedMatches.Count -eq 1) {
-            return $PinnedMatches
-        } else {
-            Write-SystemLog -Level 'WARN' -Message "Pinned InstanceId '$PinnedId' was not matched among active devices (Found $($Matched.Count) general matches). Evaluating general safeguard rules."
+    # Strict Pinned-Device Enforcement: NEVER fall back to guessing if a pinned device is missing
+    if ($PinnedIds.Count -gt 0) {
+        $TargetDevices = @()
+        $MissingPins = @()
+        foreach ($pin in $PinnedIds) {
+            $found = @($AllTouchMatched | Where-Object { $_.DeviceID -ieq $pin })
+            if ($found.Count -eq 1) {
+                $TargetDevices += $found[0]
+            } else {
+                $MissingPins += $pin
+            }
         }
+        if ($MissingPins.Count -gt 0) {
+            $MissStr = $MissingPins -join '; '
+            $Msg = "PINNED DEVICE MISSING: Administrator pinned touchscreen InstanceId(s) '$MissStr', but it is not currently connected. Refusing to guess or toggle other touch devices."
+            Write-SystemLog -Level 'ERROR' -Message $Msg
+            Save-StateReport -ResultCode 'ERR_PINNED_MISSING' -TouchState 'UNKNOWN' -DeviceStatus 'PinnedMissing' -ErrorCode -3 -InstanceId $MissStr -Message $Msg -MatchedCount 0
+            exit 15
+        }
+    } else {
+        # Unpinned mode: require exactly 1 matching touchscreen device
+        if ($AllTouchMatched.Count -eq 0) {
+            $Msg = "No 'HID-compliant touch screen' (HID Usage 000D:0004) device was found in Device Manager (HIDClass). Verify that the touchscreen driver is installed and not hidden."
+            Write-SystemLog -Level 'ERROR' -Message $Msg
+            Save-StateReport -ResultCode 'ERR_NOT_FOUND' -TouchState 'UNKNOWN' -DeviceStatus 'NotFound' -ErrorCode -1 -InstanceId '' -Message $Msg -MatchedCount 0
+            exit 10
+        }
+        if ($AllTouchMatched.Count -gt 1) {
+            $Ids = ($AllTouchMatched | Select-Object -ExpandProperty DeviceID) -join '; '
+            $Msg = "SAFEGUARD TRIGGERED: Multiple ($($AllTouchMatched.Count)) touchscreen devices were found ($Ids). Operation stopped. Re-run Install-RobloxTouchSwitch.bat as Administrator to pin the desired touchscreen node(s)."
+            Write-SystemLog -Level 'ERROR' -Message $Msg
+            Save-StateReport -ResultCode 'ERR_MULTIPLE_DEVICES' -TouchState 'UNKNOWN' -DeviceStatus 'MultipleFound' -ErrorCode -2 -InstanceId $Ids -Message $Msg -MatchedCount $AllTouchMatched.Count
+            exit 20
+        }
+        $TargetDevices = $AllTouchMatched
     }
-    return $Matched
-}
 
-$CandidateDevices = @(Get-MatchingTouchDevices -PinnedId $PinnedInstanceId)
-$MatchCount = $CandidateDevices.Count
+    Import-Module PnpDevice -ErrorAction Stop
+    $IdsSummary = ($TargetDevices | Select-Object -ExpandProperty DeviceID) -join '; '
 
-# SAFEGUARD 1: Zero matching touchscreen devices found
-if ($MatchCount -eq 0) {
-    $Msg = "No 'HID-compliant touch screen' (HID Usage 000D:0004) device was found in Device Manager (HIDClass). Verify that the touchscreen driver is installed and not hidden."
-    Write-SystemLog -Level 'ERROR' -Message $Msg
-    Save-StateReport -ResultCode 'ERR_NOT_FOUND' -TouchState 'UNKNOWN' -DeviceStatus 'NotFound' -ErrorCode -1 -InstanceId '' -Message $Msg -MatchedCount 0
-    exit 10
-}
-
-# SAFEGUARD 2: Multiple matching touchscreen devices found -> STOP and request Administrator intervention
-if ($MatchCount -gt 1) {
-    $Ids = ($CandidateDevices | Select-Object -ExpandProperty DeviceID) -join '; '
-    $Msg = "SAFEGUARD TRIGGERED: Multiple ($MatchCount) touchscreen devices were found ($Ids). Operation stopped to avoid disabling the wrong HID device. Administrator intervention is required."
-    Write-SystemLog -Level 'ERROR' -Message $Msg
-    Save-StateReport -ResultCode 'ERR_MULTIPLE_DEVICES' -TouchState 'UNKNOWN' -DeviceStatus 'MultipleFound' -ErrorCode -2 -InstanceId $Ids -Message $Msg -MatchedCount $MatchCount
-    exit 20
-}
-
-# Exactly 1 verified touchscreen device found
-$TargetDevice = $CandidateDevices[0]
-$TargetId     = $TargetDevice.DeviceID
-$InitErrCode  = [int]$TargetDevice.ConfigManagerErrorCode
-Write-SystemLog -Level 'INFO' -Message "Verified single target touchscreen: Name='$($TargetDevice.Name)', InstanceId='$TargetId', Status='$($TargetDevice.Status)', ErrorCode=$InitErrCode."
-
-Import-Module PnpDevice -ErrorAction Stop
-
-try {
     if ($Action -eq 'Disable') {
-        if ($InitErrCode -eq 22) {
-            Write-SystemLog -Level 'INFO' -Message "Touchscreen '$TargetId' is already disabled (ConfigManagerErrorCode=22). Confirming MOUSE MODE."
-        } elseif ($InitErrCode -ne 0) {
-            $DriverMsg = "Touchscreen '$TargetId' has hardware/driver error code $InitErrCode (Status='$($TargetDevice.Status)'). Refusing to mask driver fault as Mouse Mode."
-            Write-SystemLog -Level 'ERROR' -Message $DriverMsg
-            Save-StateReport -ResultCode 'ERR_DRIVER_FAULT' -TouchState 'DRIVER_ERROR' -DeviceStatus $TargetDevice.Status -ErrorCode $InitErrCode -InstanceId $TargetId -Message $DriverMsg -MatchedCount 1
-            exit 32
-        } else {
-            Disable-PnpDevice -InstanceId $TargetId -Confirm:$false -ErrorAction Stop
-            Start-Sleep -Milliseconds 350
+        foreach ($dev in $TargetDevices) {
+            $ErrCode = [int]$dev.ConfigManagerErrorCode
+            if ($ErrCode -eq 22) {
+                Write-SystemLog -Level 'INFO' -Message "Touchscreen '$($dev.DeviceID)' is already disabled (Code 22)."
+            } elseif ($ErrCode -ne 0) {
+                $DriverMsg = "Touchscreen '$($dev.DeviceID)' has hardware/driver error code $ErrCode (Status='$($dev.Status)'). Refusing to mask driver fault as Mouse Mode."
+                Write-SystemLog -Level 'ERROR' -Message $DriverMsg
+                Save-StateReport -ResultCode 'ERR_DRIVER_FAULT' -TouchState 'DRIVER_ERROR' -DeviceStatus $dev.Status -ErrorCode $ErrCode -InstanceId $dev.DeviceID -Message $DriverMsg -MatchedCount $TargetDevices.Count
+                exit 32
+            } else {
+                Disable-PnpDevice -InstanceId $dev.DeviceID -Confirm:$false -ErrorAction Stop
+            }
         }
 
-        $Refreshed = @(Get-MatchingTouchDevices -PinnedId $TargetId)
-        $NewErrCode = if ($Refreshed.Count -eq 1) { [int]$Refreshed[0].ConfigManagerErrorCode } else { -1 }
-        $NewStatus  = if ($Refreshed.Count -eq 1) { [string]$Refreshed[0].Status } else { 'Unknown' }
+        # Poll up to 2.5 seconds (10 x 250ms) for all target nodes to report ErrorCode == 22
+        $AllDisabled = $false
+        $LastStatus = 'Unknown'
+        $LastCode = -1
+        for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Milliseconds 250
+            $CheckWmi = @(Get-CimInstance -Namespace 'root\CIMV2' -ClassName 'Win32_PnPEntity' -Filter "PNPClass = 'HIDClass'" -ErrorAction SilentlyContinue)
+            $DisabledCount = 0
+            foreach ($dev in $TargetDevices) {
+                $m = @($CheckWmi | Where-Object { $_.DeviceID -ieq $dev.DeviceID })
+                if ($m.Count -eq 1) {
+                    $LastCode = [int]$m[0].ConfigManagerErrorCode
+                    $LastStatus = [string]$m[0].Status
+                    if ($LastCode -eq 22) { $DisabledCount++ }
+                }
+            }
+            if ($DisabledCount -eq $TargetDevices.Count) {
+                $AllDisabled = $true
+                break
+            }
+        }
 
-        if ($NewErrCode -eq 22) {
-            $SuccessMsg = "MOUSE MODE ACTIVE: Touchscreen ($TargetId) is disabled (Code 22). External mouse clicks in Roblox are now enabled."
+        if ($AllDisabled) {
+            $SuccessMsg = "MOUSE MODE ACTIVE: Touchscreen ($IdsSummary) is disabled (Code 22). External mouse clicks in Roblox are now enabled."
             Write-SystemLog -Level 'SUCCESS' -Message $SuccessMsg
-            Save-StateReport -ResultCode 'SUCCESS' -TouchState 'MOUSE_MODE' -DeviceStatus $NewStatus -ErrorCode 22 -InstanceId $TargetId -Message $SuccessMsg -MatchedCount 1
+            Save-StateReport -ResultCode 'SUCCESS' -TouchState 'MOUSE_MODE' -DeviceStatus $LastStatus -ErrorCode 22 -InstanceId $IdsSummary -Message $SuccessMsg -MatchedCount $TargetDevices.Count
             exit 0
         } else {
-            $FailMsg = "Disable-PnpDevice completed, but device ErrorCode is $NewErrCode (expected 22, Status='$NewStatus')."
+            $FailMsg = "Disable-PnpDevice completed, but device ErrorCode is $LastCode after 2.5s polling (expected 22, Status='$LastStatus')."
             Write-SystemLog -Level 'ERROR' -Message $FailMsg
-            Save-StateReport -ResultCode 'ERR_VERIFY_FAILED' -TouchState 'UNKNOWN' -DeviceStatus $NewStatus -ErrorCode $NewErrCode -InstanceId $TargetId -Message $FailMsg -MatchedCount 1
+            Save-StateReport -ResultCode 'ERR_VERIFY_FAILED' -TouchState 'UNKNOWN' -DeviceStatus $LastStatus -ErrorCode $LastCode -InstanceId $IdsSummary -Message $FailMsg -MatchedCount $TargetDevices.Count
             exit 30
         }
     }
     elseif ($Action -eq 'Enable') {
-        if ($InitErrCode -eq 0 -and $TargetDevice.Status -eq 'OK') {
-            Write-SystemLog -Level 'INFO' -Message "Touchscreen '$TargetId' is already enabled (ErrorCode=0, Status='OK'). Confirming TOUCH ENABLED."
-        } else {
-            Enable-PnpDevice -InstanceId $TargetId -Confirm:$false -ErrorAction Stop
-            Start-Sleep -Milliseconds 350
+        foreach ($dev in $TargetDevices) {
+            $ErrCode = [int]$dev.ConfigManagerErrorCode
+            if ($ErrCode -eq 0 -and $dev.Status -eq 'OK') {
+                Write-SystemLog -Level 'INFO' -Message "Touchscreen '$($dev.DeviceID)' is already enabled (Code 0, Status='OK')."
+            } else {
+                Enable-PnpDevice -InstanceId $dev.DeviceID -Confirm:$false -ErrorAction Stop
+            }
         }
 
-        $Refreshed = @(Get-MatchingTouchDevices -PinnedId $TargetId)
-        $NewErrCode = if ($Refreshed.Count -eq 1) { [int]$Refreshed[0].ConfigManagerErrorCode } else { -1 }
-        $NewStatus  = if ($Refreshed.Count -eq 1) { [string]$Refreshed[0].Status } else { 'Unknown' }
+        # Poll up to 2.5 seconds (10 x 250ms) for all target nodes to report ErrorCode == 0 and Status == 'OK'
+        $AllEnabled = $false
+        $LastStatus = 'Unknown'
+        $LastCode = -1
+        for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Milliseconds 250
+            $CheckWmi = @(Get-CimInstance -Namespace 'root\CIMV2' -ClassName 'Win32_PnPEntity' -Filter "PNPClass = 'HIDClass'" -ErrorAction SilentlyContinue)
+            $EnabledCount = 0
+            foreach ($dev in $TargetDevices) {
+                $m = @($CheckWmi | Where-Object { $_.DeviceID -ieq $dev.DeviceID })
+                if ($m.Count -eq 1) {
+                    $LastCode = [int]$m[0].ConfigManagerErrorCode
+                    $LastStatus = [string]$m[0].Status
+                    if ($LastCode -eq 0 -and $LastStatus -eq 'OK') { $EnabledCount++ }
+                }
+            }
+            if ($EnabledCount -eq $TargetDevices.Count) {
+                $AllEnabled = $true
+                break
+            }
+        }
 
-        if ($NewErrCode -eq 0 -and $NewStatus -eq 'OK') {
-            $SuccessMsg = "TOUCH RESTORED: Touchscreen ($TargetId) is enabled and working normally (Code 0)."
+        if ($AllEnabled) {
+            $SuccessMsg = "TOUCH RESTORED: Touchscreen ($IdsSummary) is enabled and working normally (Code 0)."
             Write-SystemLog -Level 'SUCCESS' -Message $SuccessMsg
-            Save-StateReport -ResultCode 'SUCCESS' -TouchState 'TOUCH_ON' -DeviceStatus $NewStatus -ErrorCode 0 -InstanceId $TargetId -Message $SuccessMsg -MatchedCount 1
+            Save-StateReport -ResultCode 'SUCCESS' -TouchState 'TOUCH_ON' -DeviceStatus $LastStatus -ErrorCode 0 -InstanceId $IdsSummary -Message $SuccessMsg -MatchedCount $TargetDevices.Count
             exit 0
         } else {
-            $FailMsg = "Enable-PnpDevice completed, but device ErrorCode is $NewErrCode (Status='$NewStatus')."
+            $FailMsg = "Enable-PnpDevice completed, but device ErrorCode is $LastCode after 2.5s polling (Status='$LastStatus')."
             Write-SystemLog -Level 'ERROR' -Message $FailMsg
-            Save-StateReport -ResultCode 'ERR_VERIFY_FAILED' -TouchState 'DRIVER_ERROR' -DeviceStatus $NewStatus -ErrorCode $NewErrCode -InstanceId $TargetId -Message $FailMsg -MatchedCount 1
+            Save-StateReport -ResultCode 'ERR_VERIFY_FAILED' -TouchState 'DRIVER_ERROR' -DeviceStatus $LastStatus -ErrorCode $LastCode -InstanceId $IdsSummary -Message $FailMsg -MatchedCount $TargetDevices.Count
             exit 31
         }
     }
 } catch {
-    $ErrText = "Hardware toggle failed for '$TargetId': $($_.Exception.Message)"
-    Write-SystemLog -Level 'ERROR' -Message $ErrText
-    Save-StateReport -ResultCode 'ERR_EXCEPTION' -TouchState 'UNKNOWN' -DeviceStatus 'Exception' -ErrorCode -99 -InstanceId $TargetId -Message $ErrText -MatchedCount 1
+    $FatalText = "Unhandled SYSTEM worker error: $($_.Exception.Message)"
+    Write-SystemLog -Level 'ERROR' -Message $FatalText
+    Save-StateReport -ResultCode 'ERR_FATAL_WORKER' -TouchState 'UNKNOWN' -DeviceStatus 'Exception' -ErrorCode -99 -InstanceId '' -Message $FatalText -MatchedCount 0
     exit 40
 }

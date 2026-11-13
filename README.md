@@ -1,7 +1,7 @@
 # Roblox Touchscreen Switch (Windows 11 Handheld Utility)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-brightgreen.svg)](CHANGELOG.md)
+[![Version: 1.2.0](https://img.shields.io/badge/Version-1.2.0-brightgreen.svg)](CHANGELOG.md)
 [![Platform: Windows 11](https://img.shields.io/badge/Platform-Windows%2011-0078D6.svg)]()
 [![Devices: MSI Claw | ROG Ally | Legion Go](https://img.shields.io/badge/Devices-MSI%20Claw%20%7C%20ASUS%20ROG%20Ally%20%7C%20Windows%20Handhelds-success.svg)]()
 
@@ -19,21 +19,21 @@ When playing Roblox in docked or desktop mode with an external mouse on Windows 
 
 ---
 
-## What This Utility Does (v1.1.0)
+## What This Utility Does (v1.2.0)
 
 **Roblox Touchscreen Switch** provides a handheld-friendly Windows Forms graphical app (`RobloxTouchSwitch.exe`) backed by narrowly restricted `NT AUTHORITY\SYSTEM` Scheduled Tasks:
 
 1. **[ MOUSE MODE ] (Disable Touchscreen)**: Temporarily disables the touchscreen PnP device (`ConfigManagerErrorCode = 22`) so external mouse clicks and grabbing work normally in Roblox.
-2. **[ RESTORE TOUCH ] (Enable Touchscreen)**: Re-enables the touchscreen (`ConfigManagerErrorCode = 0`, `Status = OK`) when returning to normal handheld use (the SYSTEM task completes in ~1 second while the GUI polls `status.json` for up to 4.5 seconds to verify hardware state).
+2. **[ RESTORE TOUCH ] (Enable Touchscreen)**: Re-enables the touchscreen (`ConfigManagerErrorCode = 0`, `Status = OK`) when returning to normal handheld use (the `SYSTEM` worker polls up to 2.5 seconds to confirm driver transition while the GUI polls `status.json` for up to 5.4 seconds).
 3. **Hardened Standard User / Child Account Security**:
-   - Installed once by an Administrator into `C:\Program Files\RobloxTouchscreenSwitch\`.
-   - **Strict NTFS ACLs on Both Program Files & ProgramData**: Both `C:\Program Files\RobloxTouchscreenSwitch\` and `C:\ProgramData\RobloxTouchscreenSwitch\` are locked to **Read & Execute Only** for Standard Users (`FullControl` restricted to `SYSTEM` and `Administrators`), with `ReparsePoint` checks before every write. Standard users cannot edit scripts, forge `system-activity.log`, or redirect `SYSTEM` file writes via symlinks/junctions.
-   - **Separated Logs**: The `SYSTEM` worker writes tamper-proof audit records to `C:\ProgramData\RobloxTouchscreenSwitch\system-activity.log` and `status.json`, while the user GUI logs its own events to `%LOCALAPPDATA%\RobloxTouchscreenSwitch\gui-activity.log`.
+   - Installed once by an Administrator into `$env:ProgramFiles\RobloxTouchscreenSwitch\`.
+   - **Pre-Creation Takeover & Hardlink Defense**: The installer cleanly recreates `$env:ProgramData\RobloxTouchscreenSwitch\`, explicitly sets directory ownership to `BUILTIN\Administrators` (`SetOwner`), and locks NTFS ACLs to **Read & Execute Only** for Standard Users (`FullControl` restricted to `SYSTEM` and `Administrators`). Before every file write, the `SYSTEM` worker verifies directory/file ownership, `ReparsePoint` attributes, and NTFS hardlink counts (`fsutil hardlink list`).
+   - **Separated & Rotated Logs**: The `SYSTEM` worker writes tamper-proof audit records to `$env:ProgramData\RobloxTouchscreenSwitch\system-activity.log` and `status.json` (auto-rotating at `512 KB`), while the user GUI logs its own events to `%LOCALAPPDATA%\RobloxTouchscreenSwitch\gui-activity.log`.
    - **Custom Task Scheduler SDDL (`(A;;GRGX;;;AU)`)**: Grants Authenticated Users **Read & Run (`GRGX`)** rights on `\RobloxTouchscreenSwitch\DisableTouchscreen` and `\RobloxTouchscreenSwitch\EnableTouchscreen` with zero edit/delete rights and **zero stored Administrator passwords**.
 4. **Built-In Hardware & Gaming Safeguards**:
-   - **Locale-Independent Touchscreen Detection**: Matches devices in `PNPClass = 'HIDClass'` using the standard HID Digitizer/Touchscreen usage (`HID_DEVICE_UP:000D_U:0004`) as well as `HID-compliant touch screen`, working across all Windows 11 display languages using identical WMI/CIM rules in both the GUI and worker.
+   - **Locale-Independent Touchscreen Detection**: Matches devices in `PNPClass = 'HIDClass'` using the standard HID Digitizer/Touchscreen usage (`HID_DEVICE_UP:000D_U:0004`) as well as `HID-compliant touch screen`, working across all Windows 11 display languages.
+   - **Multi-Node Composite Panel Support & Strict Pin Enforcement**: Some touch panels expose multiple `HID-compliant touch screen` nodes. During installation, the Administrator can pin a single node (`1`), multiple composite nodes (`1,2`), or `ALL`. If a pinned device is ever disconnected, the utility halts with `ERR_PINNED_MISSING` rather than guessing or disabling another connected touch monitor.
    - **Exact Error Code 22 Checking**: Distinguishes between an intentionally disabled touchscreen (`ErrorCode == 22`) and an unexpected driver fault (any other non-zero error code).
-   - **Multi-Device Hard Stop**: If more than one matching touchscreen device is found (and no `PinnedInstanceId` was configured by the Administrator), the utility refuses to guess and halts safely.
    - **Automatic Boot Fail-Safe (`RestoreTouchOnBoot`)**: Automatically re-enables the touchscreen every time Windows boots up, so restarting the handheld always restores touch.
    - **Obscure 4-Key Chords**: Uses `Ctrl + Alt + Shift + M` (Mouse Mode) and `Ctrl + Alt + Shift + T` (Restore Touch) only when the window is focused, preventing accidental triggers during gameplay.
 
@@ -41,13 +41,13 @@ When playing Roblox in docked or desktop mode with an external mouse on Windows 
 
 ## Quick Installation
 
-1. Download **`ROBLOX TOUCHSCREEN SWITCH (v1.1.0).zip`** from the **Releases** section (or clone this repository) and extract it to a local folder.
+1. Download **`ROBLOX TOUCHSCREEN SWITCH (v1.2.0).zip`** from the **Releases** page (or clone this repository) and extract it to a local folder.
 2. Right-click **`Install-RobloxTouchSwitch.bat`** and select **Run as administrator**.
 3. The installer automatically:
-   - Verifies your touchscreen hardware node (`HID_DEVICE_UP:000D_U:0004`).
-   - Compiles the native GUI executable (`C:\Program Files\RobloxTouchscreenSwitch\RobloxTouchSwitch.exe`) using the built-in Windows .NET Framework compiler (`csc.exe`)—**no third-party runtimes required**.
-   - Locks down NTFS permissions on `C:\Program Files\RobloxTouchscreenSwitch\` and `C:\ProgramData\RobloxTouchscreenSwitch\`.
-   - Registers `\RobloxTouchscreenSwitch\DisableTouchscreen`, `\RobloxTouchscreenSwitch\EnableTouchscreen`, and `\RobloxTouchscreenSwitch\RestoreTouchOnBoot` using the full path `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`.
+   - Verifies your touchscreen hardware node(s) (`HID_DEVICE_UP:000D_U:0004`).
+   - Compiles the native GUI executable (`$env:ProgramFiles\RobloxTouchscreenSwitch\RobloxTouchSwitch.exe`) using the built-in Windows .NET Framework compiler (`csc.exe`)—**no third-party runtimes required**. *(Note: Because the binary is compiled locally on your machine during install, environments enforcing strict enterprise AppLocker or Defender ASR rules may require whitelisting `$env:ProgramFiles\RobloxTouchscreenSwitch\RobloxTouchSwitch.exe`.)*
+   - Sets `Administrators` ownership and locks down NTFS permissions on `$env:ProgramFiles\RobloxTouchscreenSwitch\` and `$env:ProgramData\RobloxTouchscreenSwitch\`.
+   - Registers `\RobloxTouchscreenSwitch\DisableTouchscreen`, `\RobloxTouchscreenSwitch\EnableTouchscreen`, and `\RobloxTouchscreenSwitch\RestoreTouchOnBoot` using `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`.
    - Creates shortcuts on the **Public Desktop** and **Start Menu** (`Start -> All Apps -> Roblox Touchscreen Switch`) for all accounts on the PC.
 4. Switch to your Standard User / Child Account and launch **Roblox Touchscreen Switch** from the Desktop, Start Menu, **Xbox PC App / Full Screen Experience**, **MSI Center M**, or **ASUS Armoury Crate SE**!
 
@@ -56,9 +56,9 @@ When playing Roblox in docked or desktop mode with an external mouse on Windows 
 ## Verification & Diagnostics
 
 Run **`Run-Compatibility-Check.bat`** from either an Administrator or Standard User account to verify:
-- Single touchscreen (`HID_DEVICE_UP:000D_U:0004`) hardware detection
+- Single or pinned touchscreen (`HID_DEVICE_UP:000D_U:0004`) hardware detection
 - Installed binary and worker script presence
-- NTFS ACL write-protection and anti-ReparsePoint verification on both `C:\Program Files\RobloxTouchscreenSwitch` and `C:\ProgramData\RobloxTouchscreenSwitch`
+- Trusted `Administrators`/`SYSTEM` ownership, NTFS ACL write-protection, and anti-ReparsePoint verification on both `$env:ProgramFiles\RobloxTouchscreenSwitch` and `$env:ProgramData\RobloxTouchscreenSwitch`
 - Scheduled Task SDDL (`(A;;GRGX;;;AU)`) permissions
 - Read-only `system-activity.log` accessibility
 
