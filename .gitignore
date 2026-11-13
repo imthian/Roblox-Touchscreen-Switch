@@ -2,5 +2,6 @@
 *.exe
 *.pdb
 *.user
+*.tmp
 Thumbs.db
 Desktop.ini

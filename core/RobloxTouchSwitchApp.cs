@@ -2,12 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.IO;
 using System.Management;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -21,6 +19,17 @@ namespace RobloxTouchscreenSwitch
         public uint ConfigManagerErrorCode { get; set; }
     }
 
+    public class WorkerStatusReport
+    {
+        public long TimestampUtc { get; set; }
+        public string LastAction { get; set; }
+        public string ResultCode { get; set; }
+        public string TouchState { get; set; }
+        public int ErrorCode { get; set; }
+        public string InstanceId { get; set; }
+        public string Message { get; set; }
+    }
+
     public class MainForm : Form
     {
         private Panel headerBanner;
@@ -30,14 +39,18 @@ namespace RobloxTouchscreenSwitch
         private Button btnMouseMode;
         private Button btnRestoreTouch;
         private Button btnRefresh;
-        private Button btnOpenLogFile;
+        private Button btnOpenSystemLog;
+        private Button btnOpenUserLog;
         private TextBox txtLogViewer;
         private Label lblFooterHint;
 
-        private readonly string DataDir = @"C:\ProgramData\RobloxTouchscreenSwitch";
-        private readonly string LogPath = @"C:\ProgramData\RobloxTouchscreenSwitch\activity.log";
-        private readonly string StatusPath = @"C:\ProgramData\RobloxTouchscreenSwitch\status.json";
-        private readonly string ConfigPath = @"C:\Program Files\RobloxTouchscreenSwitch\config.json";
+        private readonly string SystemDataDir = @"C:\ProgramData\RobloxTouchscreenSwitch";
+        private readonly string SystemLogPath = @"C:\ProgramData\RobloxTouchscreenSwitch\system-activity.log";
+        private readonly string StatusPath    = @"C:\ProgramData\RobloxTouchscreenSwitch\status.json";
+        private readonly string ConfigPath    = @"C:\Program Files\RobloxTouchscreenSwitch\config.json";
+
+        private readonly string UserDataDir;
+        private readonly string UserLogPath;
 
         private readonly string TaskDisable = @"\RobloxTouchscreenSwitch\DisableTouchscreen";
         private readonly string TaskEnable  = @"\RobloxTouchscreenSwitch\EnableTouchscreen";
@@ -46,12 +59,14 @@ namespace RobloxTouchscreenSwitch
 
         public MainForm(string[] args)
         {
+            UserDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RobloxTouchscreenSwitch");
+            UserLogPath = Path.Combine(UserDataDir, "gui-activity.log");
+
             InitializeComponent();
-            EnsureDataDir();
-            AppendLocalLog("INFO", "Roblox Touchscreen Switch GUI launched by user '" + Environment.UserName + "'.");
+            EnsureUserDir();
+            AppendUserLog("INFO", "Roblox Touchscreen Switch GUI v1.1.0 launched by user '" + Environment.UserName + "'.");
             RefreshDeviceStateAndLogs();
 
-            // Support optional CLI quick-launch arguments (--mouse or --touch) for Xbox / Handheld macros
             if (args != null && args.Length > 0)
             {
                 string arg0 = args[0].Trim().ToLowerInvariant();
@@ -68,11 +83,11 @@ namespace RobloxTouchscreenSwitch
 
         private void InitializeComponent()
         {
-            this.Text = "Roblox Touchscreen Switch";
+            this.Text = "Roblox Touchscreen Switch v1.1.0";
             this.Size = new Size(760, 620);
             this.MinimumSize = new Size(680, 560);
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = Color.FromArgb(15, 23, 42); // Slate 900
+            this.BackColor = Color.FromArgb(15, 23, 42);
             this.ForeColor = Color.FromArgb(248, 250, 252);
             this.Font = new Font("Segoe UI", 10.5F, FontStyle.Regular);
             this.KeyPreview = true;
@@ -92,7 +107,7 @@ namespace RobloxTouchscreenSwitch
             headerBanner.BackColor = Color.FromArgb(30, 41, 59);
 
             lblAppTitle = new Label();
-            lblAppTitle.Text = "ROBLOX TOUCHSCREEN SWITCH  •  HANDHELD INPUT CONTROLLER";
+            lblAppTitle.Text = "ROBLOX TOUCHSCREEN SWITCH v1.1.0  -  HANDHELD INPUT CONTROLLER";
             lblAppTitle.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
             lblAppTitle.ForeColor = Color.FromArgb(148, 163, 184);
             lblAppTitle.AutoSize = false;
@@ -101,7 +116,7 @@ namespace RobloxTouchscreenSwitch
 
             lblStatusTitle = new Label();
             lblStatusTitle.Text = "CHECKING TOUCHSCREEN STATUS...";
-            lblStatusTitle.Font = new Font("Segoe UI", 18F, FontStyle.Bold);
+            lblStatusTitle.Font = new Font("Segoe UI", 17.5F, FontStyle.Bold);
             lblStatusTitle.ForeColor = Color.White;
             lblStatusTitle.AutoSize = false;
             lblStatusTitle.Dock = DockStyle.Top;
@@ -128,25 +143,25 @@ namespace RobloxTouchscreenSwitch
             mainLayout.RowCount = 4;
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 165F)); // Two huge handheld buttons
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));  // Utility toolbar row
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));  // Activity log box
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));  // Gamepad/Keyboard hint bar
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 165F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
 
-            // Large Button 1: MOUSE MODE
+            // Large Button 1: MOUSE MODE (Pure BMP/ASCII symbols for 100% GDI+ font rendering reliability)
             btnMouseMode = new Button();
             btnMouseMode.Dock = DockStyle.Fill;
             btnMouseMode.Margin = new Padding(0, 0, 10, 12);
             btnMouseMode.FlatStyle = FlatStyle.Flat;
             btnMouseMode.FlatAppearance.BorderSize = 2;
             btnMouseMode.FlatAppearance.BorderColor = Color.FromArgb(56, 189, 248);
-            btnMouseMode.BackColor = Color.FromArgb(3, 105, 161); // Sky 700
+            btnMouseMode.BackColor = Color.FromArgb(3, 105, 161);
             btnMouseMode.ForeColor = Color.White;
-            btnMouseMode.Font = new Font("Segoe UI", 15F, FontStyle.Bold);
+            btnMouseMode.Font = new Font("Segoe UI", 14.5F, FontStyle.Bold);
             btnMouseMode.Cursor = Cursors.Hand;
             btnMouseMode.TabIndex = 0;
             btnMouseMode.TabStop = false;
-            btnMouseMode.Text = "🖱️  MOUSE MODE\r\n(DISABLE TOUCHSCREEN)\r\n\r\nFixes Roblox Fling Things & People";
+            btnMouseMode.Text = "[ MOUSE MODE ]\r\nDISABLE TOUCHSCREEN\r\n\r\nFixes Roblox External Mouse Clicks";
             btnMouseMode.Click += async (s, e) =>
             {
                 await TriggerScheduledTaskAsync(TaskDisable, "MOUSE MODE (Disable Touchscreen)");
@@ -159,34 +174,34 @@ namespace RobloxTouchscreenSwitch
             btnRestoreTouch.FlatStyle = FlatStyle.Flat;
             btnRestoreTouch.FlatAppearance.BorderSize = 2;
             btnRestoreTouch.FlatAppearance.BorderColor = Color.FromArgb(74, 222, 128);
-            btnRestoreTouch.BackColor = Color.FromArgb(21, 128, 61); // Green 700
+            btnRestoreTouch.BackColor = Color.FromArgb(21, 128, 61);
             btnRestoreTouch.ForeColor = Color.White;
-            btnRestoreTouch.Font = new Font("Segoe UI", 15F, FontStyle.Bold);
+            btnRestoreTouch.Font = new Font("Segoe UI", 14.5F, FontStyle.Bold);
             btnRestoreTouch.Cursor = Cursors.Hand;
             btnRestoreTouch.TabIndex = 1;
             btnRestoreTouch.TabStop = false;
-            btnRestoreTouch.Text = "👆  RESTORE TOUCH\r\n(ENABLE TOUCHSCREEN)\r\n\r\nRestores Normal Handheld Touch";
+            btnRestoreTouch.Text = "[ RESTORE TOUCH ]\r\nENABLE TOUCHSCREEN\r\n\r\nRestores Normal Handheld Touch";
             btnRestoreTouch.Click += async (s, e) =>
             {
                 await TriggerScheduledTaskAsync(TaskEnable, "RESTORE TOUCH (Enable Touchscreen)");
             };
 
-            // Utility Toolbar Panel spanning 2 columns
+            // Utility Toolbar Panel
             FlowLayoutPanel toolbarPanel = new FlowLayoutPanel();
             toolbarPanel.Dock = DockStyle.Fill;
             toolbarPanel.FlowDirection = FlowDirection.LeftToRight;
             toolbarPanel.Margin = new Padding(0, 0, 0, 6);
 
             Label lblLogHeader = new Label();
-            lblLogHeader.Text = "Activity & Diagnostic Log:";
+            lblLogHeader.Text = "Audit & Diagnostic Logs:";
             lblLogHeader.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             lblLogHeader.ForeColor = Color.FromArgb(148, 163, 184);
             lblLogHeader.AutoSize = true;
-            lblLogHeader.Margin = new Padding(0, 8, 16, 0);
+            lblLogHeader.Margin = new Padding(0, 8, 12, 0);
 
             btnRefresh = new Button();
-            btnRefresh.Text = "🔄 Refresh Status";
-            btnRefresh.Size = new Size(175, 32);
+            btnRefresh.Text = "Refresh Status";
+            btnRefresh.Size = new Size(140, 32);
             btnRefresh.FlatStyle = FlatStyle.Flat;
             btnRefresh.FlatAppearance.BorderSize = 1;
             btnRefresh.FlatAppearance.BorderColor = Color.FromArgb(71, 85, 105);
@@ -194,41 +209,41 @@ namespace RobloxTouchscreenSwitch
             btnRefresh.ForeColor = Color.FromArgb(226, 232, 240);
             btnRefresh.Font = new Font("Segoe UI", 9.5F, FontStyle.Regular);
             btnRefresh.TabIndex = 2;
+            btnRefresh.TabStop = false;
             btnRefresh.Click += (s, e) => RefreshDeviceStateAndLogs();
 
-            btnOpenLogFile = new Button();
-            btnOpenLogFile.Text = "📄 Open Full Log File";
-            btnOpenLogFile.Size = new Size(175, 32);
-            btnOpenLogFile.FlatStyle = FlatStyle.Flat;
-            btnOpenLogFile.FlatAppearance.BorderSize = 1;
-            btnOpenLogFile.FlatAppearance.BorderColor = Color.FromArgb(71, 85, 105);
-            btnOpenLogFile.BackColor = Color.FromArgb(30, 41, 59);
-            btnOpenLogFile.ForeColor = Color.FromArgb(226, 232, 240);
-            btnOpenLogFile.Font = new Font("Segoe UI", 9.5F, FontStyle.Regular);
-            btnOpenLogFile.Margin = new Padding(10, 3, 0, 3);
-            btnOpenLogFile.TabIndex = 3;
-            btnOpenLogFile.Click += (s, e) =>
-            {
-                try
-                {
-                    if (File.Exists(LogPath))
-                    {
-                        Process.Start("notepad.exe", "\"" + LogPath + "\"");
-                    }
-                    else
-                    {
-                        MessageBox.Show("Log file has not been created yet.", "Activity Log", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Could not open log file: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            };
+            btnOpenSystemLog = new Button();
+            btnOpenSystemLog.Text = "Open SYSTEM Audit Log";
+            btnOpenSystemLog.Size = new Size(175, 32);
+            btnOpenSystemLog.FlatStyle = FlatStyle.Flat;
+            btnOpenSystemLog.FlatAppearance.BorderSize = 1;
+            btnOpenSystemLog.FlatAppearance.BorderColor = Color.FromArgb(71, 85, 105);
+            btnOpenSystemLog.BackColor = Color.FromArgb(30, 41, 59);
+            btnOpenSystemLog.ForeColor = Color.FromArgb(226, 232, 240);
+            btnOpenSystemLog.Font = new Font("Segoe UI", 9.5F, FontStyle.Regular);
+            btnOpenSystemLog.Margin = new Padding(8, 3, 0, 3);
+            btnOpenSystemLog.TabIndex = 3;
+            btnOpenSystemLog.TabStop = false;
+            btnOpenSystemLog.Click += (s, e) => OpenLogInNotepad(SystemLogPath, "SYSTEM Audit Log");
+
+            btnOpenUserLog = new Button();
+            btnOpenUserLog.Text = "Open User GUI Log";
+            btnOpenUserLog.Size = new Size(155, 32);
+            btnOpenUserLog.FlatStyle = FlatStyle.Flat;
+            btnOpenUserLog.FlatAppearance.BorderSize = 1;
+            btnOpenUserLog.FlatAppearance.BorderColor = Color.FromArgb(71, 85, 105);
+            btnOpenUserLog.BackColor = Color.FromArgb(30, 41, 59);
+            btnOpenUserLog.ForeColor = Color.FromArgb(226, 232, 240);
+            btnOpenUserLog.Font = new Font("Segoe UI", 9.5F, FontStyle.Regular);
+            btnOpenUserLog.Margin = new Padding(8, 3, 0, 3);
+            btnOpenUserLog.TabIndex = 4;
+            btnOpenUserLog.TabStop = false;
+            btnOpenUserLog.Click += (s, e) => OpenLogInNotepad(UserLogPath, "User GUI Log");
 
             toolbarPanel.Controls.Add(lblLogHeader);
             toolbarPanel.Controls.Add(btnRefresh);
-            toolbarPanel.Controls.Add(btnOpenLogFile);
+            toolbarPanel.Controls.Add(btnOpenSystemLog);
+            toolbarPanel.Controls.Add(btnOpenUserLog);
 
             // Activity Log Textbox
             txtLogViewer = new TextBox();
@@ -263,11 +278,28 @@ namespace RobloxTouchscreenSwitch
             this.Controls.Add(headerBanner);
         }
 
+        private void OpenLogInNotepad(string path, string title)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    Process.Start("notepad.exe", "\"" + path + "\"");
+                }
+                else
+                {
+                    MessageBox.Show(title + " has not been created yet at:\r\n" + path, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not open " + title + ": " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         private void MainForm_KeyDown(object sender, KeyEventArgs e)
         {
             if (isBusy) return;
-            // Require deliberate 4-key modifier chord (Ctrl + Alt + Shift) so common game keys
-            // (WASD, 1/2, M, T, Space, Enter, F5) and controller buttons never trigger accidental toggles.
             if (e.Control && e.Alt && e.Shift)
             {
                 if (e.KeyCode == Keys.M)
@@ -288,19 +320,19 @@ namespace RobloxTouchscreenSwitch
             }
         }
 
-        private void EnsureDataDir()
+        private void EnsureUserDir()
         {
             try
             {
-                if (!Directory.Exists(DataDir))
+                if (!Directory.Exists(UserDataDir))
                 {
-                    Directory.CreateDirectory(DataDir);
+                    Directory.CreateDirectory(UserDataDir);
                 }
             }
             catch { }
         }
 
-        private void AppendLocalLog(string level, string message)
+        private void AppendUserLog(string level, string message)
         {
             try
             {
@@ -310,7 +342,7 @@ namespace RobloxTouchscreenSwitch
                     level,
                     message,
                     Environment.NewLine);
-                File.AppendAllText(LogPath, line, Encoding.UTF8);
+                File.AppendAllText(UserLogPath, line, Encoding.UTF8);
             }
             catch { }
         }
@@ -333,6 +365,44 @@ namespace RobloxTouchscreenSwitch
             return null;
         }
 
+        private string ExtractJsonString(string json, string key)
+        {
+            Match m = Regex.Match(json, "\"" + key + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+            return m.Success ? Regex.Unescape(m.Groups[1].Value) : "";
+        }
+
+        private long ExtractJsonLong(string json, string key)
+        {
+            Match m = Regex.Match(json, "\"" + key + "\"\\s*:\\s*(-?\\d+)");
+            long val = 0;
+            if (m.Success) long.TryParse(m.Groups[1].Value, out val);
+            return val;
+        }
+
+        private WorkerStatusReport ReadStatusReport()
+        {
+            try
+            {
+                if (File.Exists(StatusPath))
+                {
+                    string json = File.ReadAllText(StatusPath, Encoding.UTF8);
+                    return new WorkerStatusReport
+                    {
+                        TimestampUtc = ExtractJsonLong(json, "TimestampUtc"),
+                        LastAction   = ExtractJsonString(json, "LastAction"),
+                        ResultCode   = ExtractJsonString(json, "ResultCode"),
+                        TouchState   = ExtractJsonString(json, "TouchState"),
+                        ErrorCode    = (int)ExtractJsonLong(json, "ErrorCode"),
+                        InstanceId   = ExtractJsonString(json, "InstanceId"),
+                        Message      = ExtractJsonString(json, "Message")
+                    };
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        // Unified Device Discovery Rule (Matches SYSTEM Worker 100%: PNPClass='HIDClass' AND (FriendlyName='HID-compliant touch screen' OR HID_DEVICE_UP:000D_U:0004))
         private List<TouchDeviceRecord> QueryTouchDevices()
         {
             List<TouchDeviceRecord> list = new List<TouchDeviceRecord>();
@@ -340,30 +410,66 @@ namespace RobloxTouchscreenSwitch
             {
                 using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
                     @"root\CIMV2",
-                    "SELECT Name, DeviceID, Status, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE Name = 'HID-compliant touch screen'"))
+                    "SELECT Name, DeviceID, Status, ConfigManagerErrorCode, HardwareID, CompatibleID FROM Win32_PnPEntity WHERE PNPClass = 'HIDClass'"))
                 {
                     foreach (ManagementObject obj in searcher.Get())
                     {
-                        TouchDeviceRecord rec = new TouchDeviceRecord
+                        string name = Convert.ToString(obj["Name"] ?? "");
+                        bool isTouchName = string.Equals(name, "HID-compliant touch screen", StringComparison.OrdinalIgnoreCase);
+                        bool isTouchUsage = false;
+
+                        string[] hwIds = obj["HardwareID"] as string[];
+                        if (hwIds != null)
                         {
-                            Name = Convert.ToString(obj["Name"] ?? ""),
-                            DeviceID = Convert.ToString(obj["DeviceID"] ?? ""),
-                            Status = Convert.ToString(obj["Status"] ?? ""),
-                            ConfigManagerErrorCode = obj["ConfigManagerErrorCode"] != null
-                                ? Convert.ToUInt32(obj["ConfigManagerErrorCode"])
-                                : 0u
-                        };
-                        list.Add(rec);
+                            foreach (string id in hwIds)
+                            {
+                                if (id != null && id.IndexOf("HID_DEVICE_UP:000D_U:0004", StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    isTouchUsage = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!isTouchUsage)
+                        {
+                            string[] compatIds = obj["CompatibleID"] as string[];
+                            if (compatIds != null)
+                            {
+                                foreach (string id in compatIds)
+                                {
+                                    if (id != null && id.IndexOf("HID_DEVICE_UP:000D_U:0004", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        isTouchUsage = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (isTouchName || isTouchUsage)
+                        {
+                            TouchDeviceRecord rec = new TouchDeviceRecord
+                            {
+                                Name = name,
+                                DeviceID = Convert.ToString(obj["DeviceID"] ?? ""),
+                                Status = Convert.ToString(obj["Status"] ?? ""),
+                                ConfigManagerErrorCode = obj["ConfigManagerErrorCode"] != null
+                                    ? Convert.ToUInt32(obj["ConfigManagerErrorCode"])
+                                    : 0u
+                            };
+                            list.Add(rec);
+                        }
                     }
                 }
             }
             catch (Exception ex)
             {
-                AppendLocalLog("WARN", "WMI query warning: " + ex.Message);
+                AppendUserLog("WARN", "WMI query warning: " + ex.Message);
             }
 
             string pinned = GetPinnedInstanceId();
-            if (!string.IsNullOrEmpty(pinned) && list.Count > 1)
+            if (!string.IsNullOrEmpty(pinned))
             {
                 List<TouchDeviceRecord> filtered = list.FindAll(d => string.Equals(d.DeviceID, pinned, StringComparison.OrdinalIgnoreCase));
                 if (filtered.Count == 1)
@@ -380,50 +486,68 @@ namespace RobloxTouchscreenSwitch
 
             if (devices.Count == 0)
             {
-                headerBanner.BackColor = Color.FromArgb(153, 27, 27); // Red 800
-                lblStatusTitle.Text = "⚠️ TOUCHSCREEN DEVICE NOT FOUND";
-                lblStatusSubtitle.Text = "No 'HID-compliant touch screen' was detected in Device Manager. Check driver status or run Recovery.";
+                headerBanner.BackColor = Color.FromArgb(153, 27, 27);
+                lblStatusTitle.Text = "[!] TOUCHSCREEN DEVICE NOT FOUND";
+                lblStatusSubtitle.Text = "No touchscreen (HID Usage 000D:0004) was detected in Device Manager. Check driver status or run Recovery.";
             }
             else if (devices.Count > 1)
             {
-                headerBanner.BackColor = Color.FromArgb(180, 83, 9); // Amber 700
-                lblStatusTitle.Text = "🛑 MULTIPLE TOUCHSCREENS FOUND (" + devices.Count + ") — ADMIN REQUIRED";
+                headerBanner.BackColor = Color.FromArgb(180, 83, 9);
+                lblStatusTitle.Text = "[!] MULTIPLE TOUCHSCREENS FOUND (" + devices.Count + ") - ADMIN REQUIRED";
                 lblStatusSubtitle.Text = "Safeguard active: Refusing to guess between multiple HID touch devices. Administrator intervention required.";
             }
             else
             {
                 TouchDeviceRecord dev = devices[0];
-                bool isDisabled = (dev.ConfigManagerErrorCode == 22) || !string.Equals(dev.Status, "OK", StringComparison.OrdinalIgnoreCase);
-
-                if (isDisabled)
+                if (dev.ConfigManagerErrorCode == 22)
                 {
-                    headerBanner.BackColor = Color.FromArgb(3, 105, 161); // Sky Blue 700
-                    lblStatusTitle.Text = "🖱️ MOUSE MODE ACTIVE  (TOUCHSCREEN OFF)";
+                    headerBanner.BackColor = Color.FromArgb(3, 105, 161);
+                    lblStatusTitle.Text = "MOUSE MODE ACTIVE  (TOUCHSCREEN OFF)";
                     lblStatusSubtitle.Text = "Ready for Roblox (Fling Things and People). External mouse clicks & grabbing work normally. [" + dev.DeviceID + "]";
+                }
+                else if (dev.ConfigManagerErrorCode == 0 && string.Equals(dev.Status, "OK", StringComparison.OrdinalIgnoreCase))
+                {
+                    headerBanner.BackColor = Color.FromArgb(21, 128, 61);
+                    lblStatusTitle.Text = "TOUCHSCREEN ENABLED  (NORMAL HANDHELD MODE)";
+                    lblStatusSubtitle.Text = "Touchscreen is ON and working normally. Click MOUSE MODE before playing Roblox with an external mouse. [" + dev.DeviceID + "]";
                 }
                 else
                 {
-                    headerBanner.BackColor = Color.FromArgb(21, 128, 61); // Green 700
-                    lblStatusTitle.Text = "👆 TOUCHSCREEN ENABLED  (NORMAL HANDHELD MODE)";
-                    lblStatusSubtitle.Text = "Touchscreen is ON and working normally. Click MOUSE MODE before playing Roblox with an external mouse. [" + dev.DeviceID + "]";
+                    headerBanner.BackColor = Color.FromArgb(180, 83, 9);
+                    lblStatusTitle.Text = "[!] TOUCHSCREEN DRIVER ERROR (CODE " + dev.ConfigManagerErrorCode + ")";
+                    lblStatusSubtitle.Text = "Device status is '" + dev.Status + "' (Error Code " + dev.ConfigManagerErrorCode + "). Click RESTORE TOUCH or run Emergency Recovery. [" + dev.DeviceID + "]";
                 }
             }
 
-            LoadTailOfActivityLog();
+            LoadCombinedLogs();
         }
 
-        private void LoadTailOfActivityLog()
+        private void LoadCombinedLogs()
         {
             try
             {
-                if (File.Exists(LogPath))
+                List<string> combined = new List<string>();
+                if (File.Exists(SystemLogPath))
                 {
-                    string[] lines = File.ReadAllLines(LogPath, Encoding.UTF8);
-                    int start = Math.Max(0, lines.Length - 80);
+                    string[] sysLines = File.ReadAllLines(SystemLogPath, Encoding.UTF8);
+                    int startSys = Math.Max(0, sysLines.Length - 50);
+                    for (int i = startSys; i < sysLines.Length; i++) combined.Add(sysLines[i]);
+                }
+                if (File.Exists(UserLogPath))
+                {
+                    string[] usrLines = File.ReadAllLines(UserLogPath, Encoding.UTF8);
+                    int startUsr = Math.Max(0, usrLines.Length - 30);
+                    for (int i = startUsr; i < usrLines.Length; i++) combined.Add(usrLines[i]);
+                }
+                combined.Sort(StringComparer.Ordinal);
+
+                if (combined.Count > 0)
+                {
+                    int start = Math.Max(0, combined.Count - 70);
                     StringBuilder sb = new StringBuilder();
-                    for (int i = start; i < lines.Length; i++)
+                    for (int i = start; i < combined.Count; i++)
                     {
-                        sb.AppendLine(lines[i]);
+                        sb.AppendLine(combined[i]);
                     }
                     txtLogViewer.Text = sb.ToString();
                     txtLogViewer.SelectionStart = txtLogViewer.Text.Length;
@@ -431,12 +555,12 @@ namespace RobloxTouchscreenSwitch
                 }
                 else
                 {
-                    txtLogViewer.Text = "Activity log initialized. Click MOUSE MODE or RESTORE TOUCH to record events.";
+                    txtLogViewer.Text = "Audit & GUI logs initialized. Click MOUSE MODE or RESTORE TOUCH to record events.";
                 }
             }
             catch (Exception ex)
             {
-                txtLogViewer.Text = "Unable to read activity log: " + ex.Message;
+                txtLogViewer.Text = "Unable to read logs: " + ex.Message;
             }
         }
 
@@ -444,18 +568,17 @@ namespace RobloxTouchscreenSwitch
         {
             if (isBusy) return;
 
-            // Pre-check hardware safeguards in GUI so we can display an immediate, helpful message if needed
             List<TouchDeviceRecord> preCheck = QueryTouchDevices();
             if (preCheck.Count == 0)
             {
-                AppendLocalLog("ERROR", "Attempted '" + friendlyActionName + "', but no 'HID-compliant touch screen' device was found in Device Manager.");
+                AppendUserLog("ERROR", "Attempted '" + friendlyActionName + "', but no touchscreen device (HID 000D:0004) was found in Device Manager.");
                 RefreshDeviceStateAndLogs();
                 MessageBox.Show(
-                    "The 'HID-compliant touch screen' device could not be found in Windows Device Manager.\r\n\r\n" +
+                    "The touchscreen device could not be found in Windows Device Manager.\r\n\r\n" +
                     "What to check:\r\n" +
-                    "1. Ensure the handheld screen is powered on and not detached.\r\n" +
+                    "1. Ensure the handheld screen is powered on.\r\n" +
                     "2. Ask an Administrator to open Device Manager -> View -> Show hidden devices -> Human Interface Devices.\r\n" +
-                    "3. Run 'Scan for hardware changes' or run the Emergency Recovery script.",
+                    "3. Run 'Scan for hardware changes' or run Emergency-Restore-Touchscreen.bat.",
                     "Touchscreen Device Not Found",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -465,11 +588,11 @@ namespace RobloxTouchscreenSwitch
             if (preCheck.Count > 1)
             {
                 StringBuilder ids = new StringBuilder();
-                foreach (var d in preCheck) ids.AppendLine(" • " + d.DeviceID + " (Status: " + d.Status + ")");
-                AppendLocalLog("ERROR", "Safeguard halted '" + friendlyActionName + "': Multiple (" + preCheck.Count + ") matching touchscreen devices found.");
+                foreach (var d in preCheck) ids.AppendLine(" - " + d.DeviceID + " (Status: " + d.Status + ", Code: " + d.ConfigManagerErrorCode + ")");
+                AppendUserLog("ERROR", "Safeguard halted '" + friendlyActionName + "': Multiple (" + preCheck.Count + ") matching touchscreen devices found.");
                 RefreshDeviceStateAndLogs();
                 MessageBox.Show(
-                    "SAFETY STOP: Multiple (" + preCheck.Count + ") 'HID-compliant touch screen' devices were detected:\r\n\r\n" +
+                    "SAFETY STOP: Multiple (" + preCheck.Count + ") touchscreen devices were detected:\r\n\r\n" +
                     ids.ToString() + "\r\n" +
                     "To protect your system, Roblox Touchscreen Switch will never guess or disable unrelated HID devices.\r\n\r\n" +
                     "Please ask the Administrator to re-run Install-RobloxTouchSwitch.bat to pin the exact hardware InstanceId in config.json.",
@@ -482,9 +605,12 @@ namespace RobloxTouchscreenSwitch
             isBusy = true;
             btnMouseMode.Enabled = false;
             btnRestoreTouch.Enabled = false;
-            lblStatusTitle.Text = "⏳ APPLYING " + friendlyActionName.ToUpperInvariant() + "...";
+            lblStatusTitle.Text = "APPLYING " + friendlyActionName.ToUpperInvariant() + "...";
             lblStatusSubtitle.Text = "Triggering restricted SYSTEM Scheduled Task (" + taskFullName + ")...";
-            AppendLocalLog("INFO", "Requesting Scheduled Task '" + taskFullName + "' for '" + friendlyActionName + "'.");
+            AppendUserLog("INFO", "Requesting Scheduled Task '" + taskFullName + "' for '" + friendlyActionName + "'.");
+
+            WorkerStatusReport beforeReport = ReadStatusReport();
+            long previousTimestampUtc = beforeReport != null ? beforeReport.TimestampUtc : 0L;
 
             try
             {
@@ -492,7 +618,7 @@ namespace RobloxTouchscreenSwitch
                 {
                     ProcessStartInfo psi = new ProcessStartInfo
                     {
-                        FileName = "schtasks.exe",
+                        FileName = Path.Combine(Environment.SystemDirectory, "schtasks.exe"),
                         Arguments = "/Run /TN \"" + taskFullName + "\"",
                         CreateNoWindow = true,
                         UseShellExecute = false,
@@ -501,14 +627,24 @@ namespace RobloxTouchscreenSwitch
                     };
                     using (Process p = Process.Start(psi))
                     {
-                        p.WaitForExit(8000);
+                        bool finished = p.WaitForExit(8000);
+                        if (!finished)
+                        {
+                            try { p.Kill(); } catch { }
+                            return -999;
+                        }
                         return p.ExitCode;
                     }
                 });
 
-                if (exitCode != 0)
+                if (exitCode == -999)
                 {
-                    AppendLocalLog("ERROR", "schtasks.exe /Run failed for '" + taskFullName + "' with exit code " + exitCode + ". Ensure the Administrator installer was run.");
+                    AppendUserLog("ERROR", "schtasks.exe /Run timed out after 8 seconds for '" + taskFullName + "'.");
+                    MessageBox.Show("Timed out waiting for Scheduled Task '" + taskFullName + "' to start.", "Scheduled Task Timeout", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                else if (exitCode != 0)
+                {
+                    AppendUserLog("ERROR", "schtasks.exe /Run failed for '" + taskFullName + "' with exit code " + exitCode + ".");
                     MessageBox.Show(
                         "Could not trigger Scheduled Task '" + taskFullName + "' (Exit Code " + exitCode + ").\r\n\r\n" +
                         "Please ask an Administrator to run 'Install-RobloxTouchSwitch.bat' to register and grant permissions for the tasks.",
@@ -518,27 +654,41 @@ namespace RobloxTouchscreenSwitch
                 }
                 else
                 {
-                    // Poll up to 4.5 seconds for the SYSTEM task to toggle the PnP device and write status.json
-                    bool targetDisable = taskFullName.IndexOf("Disable", StringComparison.OrdinalIgnoreCase) >= 0;
+                    // Poll status.json (written by the SYSTEM worker) and live device state for up to 4.5 seconds
+                    WorkerStatusReport updatedReport = null;
                     for (int attempt = 0; attempt < 15; attempt++)
                     {
                         await Task.Delay(300);
-                        List<TouchDeviceRecord> current = QueryTouchDevices();
-                        if (current.Count == 1)
+                        WorkerStatusReport candidate = ReadStatusReport();
+                        if (candidate != null && candidate.TimestampUtc > previousTimestampUtc)
                         {
-                            bool nowDisabled = (current[0].ConfigManagerErrorCode == 22) ||
-                                               !string.Equals(current[0].Status, "OK", StringComparison.OrdinalIgnoreCase);
-                            if (targetDisable == nowDisabled)
-                            {
-                                break;
-                            }
+                            updatedReport = candidate;
+                            break;
+                        }
+                    }
+
+                    if (updatedReport != null)
+                    {
+                        if (!string.Equals(updatedReport.ResultCode, "SUCCESS", StringComparison.OrdinalIgnoreCase))
+                        {
+                            AppendUserLog("ERROR", "SYSTEM worker reported " + updatedReport.ResultCode + ": " + updatedReport.Message);
+                            MessageBox.Show(
+                                "The SYSTEM worker reported an issue (" + updatedReport.ResultCode + "):\r\n\r\n" +
+                                updatedReport.Message,
+                                "Roblox Touchscreen Switch - Hardware Alert",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Warning);
+                        }
+                        else
+                        {
+                            AppendUserLog("INFO", "SYSTEM worker confirmed " + updatedReport.TouchState + " for " + updatedReport.InstanceId + ".");
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                AppendLocalLog("ERROR", "Exception running scheduled task: " + ex.Message);
+                AppendUserLog("ERROR", "Exception running scheduled task: " + ex.Message);
                 MessageBox.Show("Unexpected error triggering Scheduled Task:\r\n" + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally

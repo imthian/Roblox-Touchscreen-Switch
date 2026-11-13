@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Administrator Uninstaller for Roblox Touchscreen Switch (Windows 11)
+    Administrator Uninstaller for Roblox Touchscreen Switch v1.1.0 (Windows 11)
 .DESCRIPTION
-    1. Automatically re-enables the 'HID-compliant touch screen' device first so the handheld is never left with touch disabled.
+    1. Automatically re-enables any disabled touchscreen device (Code 22) first so the handheld is never left with touch disabled.
     2. Removes the Scheduled Tasks and '\RobloxTouchscreenSwitch' task folder.
     3. Removes All-Users Desktop and Start Menu shortcuts.
-    4. Removes C:\Program Files\RobloxTouchscreenSwitch (and optionally C:\ProgramData\RobloxTouchscreenSwitch).
+    4. Removes C:\Program Files\RobloxTouchscreenSwitch and optionally C:\ProgramData\RobloxTouchscreenSwitch.
 #>
 [CmdletBinding()]
 param()
@@ -13,7 +13,7 @@ param()
 $ErrorActionPreference = 'Continue'
 
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "  ROBLOX TOUCHSCREEN SWITCH - ADMINISTRATOR UNINSTALLER" -ForegroundColor Cyan
+Write-Host "  ROBLOX TOUCHSCREEN SWITCH v1.1.0 - ADMINISTRATOR UNINSTALLER" -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -24,18 +24,19 @@ if (-not $CurrentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
 }
 
 # 1. Safety First: Ensure Touchscreen is Re-Enabled before removing anything
-Write-Host "[1/4] Restoring 'HID-compliant touch screen' before uninstalling..." -ForegroundColor Yellow
+Write-Host "[1/4] Restoring touchscreen before uninstalling..." -ForegroundColor Yellow
 try {
     Import-Module PnpDevice -ErrorAction SilentlyContinue
-    $TouchDevs = @(Get-PnpDevice -Class 'HIDClass' -ErrorAction SilentlyContinue | Where-Object {
-        $_.FriendlyName -eq 'HID-compliant touch screen'
-    })
-    foreach ($d in $TouchDevs) {
-        if ($d.Status -ne 'OK' -or $d.ConfigManagerErrorCode -eq 22) {
-            Enable-PnpDevice -InstanceId $d.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
-            Write-Host "  [OK] Re-enabled touchscreen: $($d.InstanceId)" -ForegroundColor Green
-        } else {
-            Write-Host "  [OK] Touchscreen is already enabled: $($d.InstanceId)" -ForegroundColor Green
+    $WmiDevices = @(Get-CimInstance -Namespace 'root\CIMV2' -ClassName 'Win32_PnPEntity' -Filter "PNPClass = 'HIDClass'" -ErrorAction SilentlyContinue)
+    foreach ($d in $WmiDevices) {
+        $IsTouch = ($d.Name -eq 'HID-compliant touch screen') -or (($d.HardwareID + $d.CompatibleID) -imatch 'HID_DEVICE_UP:000D_U:0004')
+        if ($IsTouch) {
+            if ($d.ConfigManagerErrorCode -eq 22 -or $d.Status -ne 'OK') {
+                Enable-PnpDevice -InstanceId $d.DeviceID -Confirm:$false -ErrorAction SilentlyContinue
+                Write-Host "  [OK] Re-enabled touchscreen: $($d.DeviceID)" -ForegroundColor Green
+            } else {
+                Write-Host "  [OK] Touchscreen is already enabled: $($d.DeviceID)" -ForegroundColor Green
+            }
         }
     }
 } catch {
@@ -81,14 +82,14 @@ if (Test-Path -LiteralPath $InstallDir) {
     Write-Host "  [OK] Removed '$InstallDir'." -ForegroundColor Green
 }
 
-$KeepLogs = Read-Host "Do you want to delete the troubleshooting activity logs in '$DataDir'? [Y/N] (Default: Y)"
-if ($KeepLogs -eq '' -or $KeepLogs -match '^[Yy]') {
+$DeleteLogsPrompt = Read-Host "Do you want to delete the SYSTEM audit logs in '$DataDir'? [Y/N] (Default: Y)"
+if ($DeleteLogsPrompt -eq '' -or $DeleteLogsPrompt -match '^[Yy]') {
     if (Test-Path -LiteralPath $DataDir) {
         Remove-Item -LiteralPath $DataDir -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "  [OK] Removed '$DataDir'." -ForegroundColor Green
     }
 } else {
-    Write-Host "  [INFO] Retained activity logs in '$DataDir'." -ForegroundColor Cyan
+    Write-Host "  [INFO] Retained SYSTEM audit logs in '$DataDir'." -ForegroundColor Cyan
 }
 
 Write-Host ""

@@ -1,6 +1,7 @@
-# 🎮 Roblox Touchscreen Switch (Windows 11 Handheld Utility)
+# Roblox Touchscreen Switch (Windows 11 Handheld Utility)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-brightgreen.svg)](CHANGELOG.md)
 [![Platform: Windows 11](https://img.shields.io/badge/Platform-Windows%2011-0078D6.svg)]()
 [![Devices: MSI Claw | ROG Ally | Legion Go](https://img.shields.io/badge/Devices-MSI%20Claw%20%7C%20ASUS%20ROG%20Ally%20%7C%20Windows%20Handhelds-success.svg)]()
 
@@ -8,69 +9,62 @@ A lightweight, open-source Windows 11 graphical utility that fixes the **Roblox 
 
 ---
 
-## 🐛 The Problem
+## The Problem
 
 When playing Roblox in docked or desktop mode with an external mouse on Windows 11 touchscreen handhelds (**MSI Claw**, **ASUS ROG Ally**, **Lenovo Legion Go**) or touchscreen laptops:
 - The external mouse cursor moves normally.
 - Mouse clicks work inside Roblox menus.
 - **Mouse clicks and hold/drag actions fail to register during live gameplay** (for example, grabbing and throwing objects or players in *Fling Things and People*).
-- Disabling the `HID-compliant touch screen` device in Windows Device Manager immediately fixes the issue—but **Device Manager requires Administrator privileges**, leaving parents with a frustrating dilemma if their child plays on a **Standard User / Microsoft Family Child Account**.
+- Disabling the touchscreen device in Windows Device Manager immediately fixes the issue—but **Device Manager requires Administrator privileges**, leaving parents with a frustrating dilemma if their child plays on a **Standard User / Microsoft Family Child Account**.
 
 ---
 
-## ✨ What This Utility Does
+## What This Utility Does (v1.1.0)
 
 **Roblox Touchscreen Switch** provides a handheld-friendly Windows Forms graphical app (`RobloxTouchSwitch.exe`) backed by narrowly restricted `NT AUTHORITY\SYSTEM` Scheduled Tasks:
 
-1. **🖱️ MOUSE MODE (Disable Touchscreen)**: Temporarily disables the `HID-compliant touch screen` PnP device so external mouse clicks and grabbing work normally in Roblox.
-2. **👆 RESTORE TOUCH (Enable Touchscreen)**: Re-enables the touchscreen in 1 second when returning to normal handheld use.
-3. **🔒 Standard User / Child Account Safe (No Admin Password Needed)**:
+1. **[ MOUSE MODE ] (Disable Touchscreen)**: Temporarily disables the touchscreen PnP device (`ConfigManagerErrorCode = 22`) so external mouse clicks and grabbing work normally in Roblox.
+2. **[ RESTORE TOUCH ] (Enable Touchscreen)**: Re-enables the touchscreen (`ConfigManagerErrorCode = 0`, `Status = OK`) when returning to normal handheld use (the SYSTEM task completes in ~1 second while the GUI polls `status.json` for up to 4.5 seconds to verify hardware state).
+3. **Hardened Standard User / Child Account Security**:
    - Installed once by an Administrator into `C:\Program Files\RobloxTouchscreenSwitch\`.
-   - Folder and script NTFS ACLs are locked to **Read & Execute Only** for Standard Users (`FullControl` restricted to `SYSTEM` and `Administrators`).
-   - Uses custom Task Scheduler Security Descriptors (`SDDL: (A;;GRGX;;;AU)`) so a Standard User can **trigger** the `DisableTouchscreen` and `EnableTouchscreen` tasks without UAC prompts, but **cannot edit the tasks, modify the scripts, or execute arbitrary commands**.
-   - **Never** stores or caches Administrator passwords anywhere.
-4. **🛡️ Built-In Hardware & Gaming Safeguards**:
-   - Targets **only** `Class -eq 'HIDClass'` and `FriendlyName -eq 'HID-compliant touch screen'`.
+   - **Strict NTFS ACLs on Both Program Files & ProgramData**: Both `C:\Program Files\RobloxTouchscreenSwitch\` and `C:\ProgramData\RobloxTouchscreenSwitch\` are locked to **Read & Execute Only** for Standard Users (`FullControl` restricted to `SYSTEM` and `Administrators`), with `ReparsePoint` checks before every write. Standard users cannot edit scripts, forge `system-activity.log`, or redirect `SYSTEM` file writes via symlinks/junctions.
+   - **Separated Logs**: The `SYSTEM` worker writes tamper-proof audit records to `C:\ProgramData\RobloxTouchscreenSwitch\system-activity.log` and `status.json`, while the user GUI logs its own events to `%LOCALAPPDATA%\RobloxTouchscreenSwitch\gui-activity.log`.
+   - **Custom Task Scheduler SDDL (`(A;;GRGX;;;AU)`)**: Grants Authenticated Users **Read & Run (`GRGX`)** rights on `\RobloxTouchscreenSwitch\DisableTouchscreen` and `\RobloxTouchscreenSwitch\EnableTouchscreen` with zero edit/delete rights and **zero stored Administrator passwords**.
+4. **Built-In Hardware & Gaming Safeguards**:
+   - **Locale-Independent Touchscreen Detection**: Matches devices in `PNPClass = 'HIDClass'` using the standard HID Digitizer/Touchscreen usage (`HID_DEVICE_UP:000D_U:0004`) as well as `HID-compliant touch screen`, working across all Windows 11 display languages using identical WMI/CIM rules in both the GUI and worker.
+   - **Exact Error Code 22 Checking**: Distinguishes between an intentionally disabled touchscreen (`ErrorCode == 22`) and an unexpected driver fault (any other non-zero error code).
    - **Multi-Device Hard Stop**: If more than one matching touchscreen device is found (and no `PinnedInstanceId` was configured by the Administrator), the utility refuses to guess and halts safely.
    - **Automatic Boot Fail-Safe (`RestoreTouchOnBoot`)**: Automatically re-enables the touchscreen every time Windows boots up, so restarting the handheld always restores touch.
    - **Obscure 4-Key Chords**: Uses `Ctrl + Alt + Shift + M` (Mouse Mode) and `Ctrl + Alt + Shift + T` (Restore Touch) only when the window is focused, preventing accidental triggers during gameplay.
 
 ---
 
-## 🚀 Quick Installation
+## Quick Installation
 
-1. Download the latest release ZIP (or clone this repository) and extract it to a local folder.
+1. Download **`ROBLOX TOUCHSCREEN SWITCH (v1.1.0).zip`** from the **Releases** section (or clone this repository) and extract it to a local folder.
 2. Right-click **`Install-RobloxTouchSwitch.bat`** and select **Run as administrator**.
 3. The installer automatically:
-   - Verifies your `HID-compliant touch screen` hardware node.
+   - Verifies your touchscreen hardware node (`HID_DEVICE_UP:000D_U:0004`).
    - Compiles the native GUI executable (`C:\Program Files\RobloxTouchscreenSwitch\RobloxTouchSwitch.exe`) using the built-in Windows .NET Framework compiler (`csc.exe`)—**no third-party runtimes required**.
-   - Locks down NTFS permissions on `C:\Program Files\RobloxTouchscreenSwitch\`.
-   - Registers `\RobloxTouchscreenSwitch\DisableTouchscreen`, `\RobloxTouchscreenSwitch\EnableTouchscreen`, and `\RobloxTouchscreenSwitch\RestoreTouchOnBoot`.
+   - Locks down NTFS permissions on `C:\Program Files\RobloxTouchscreenSwitch\` and `C:\ProgramData\RobloxTouchscreenSwitch\`.
+   - Registers `\RobloxTouchscreenSwitch\DisableTouchscreen`, `\RobloxTouchscreenSwitch\EnableTouchscreen`, and `\RobloxTouchscreenSwitch\RestoreTouchOnBoot` using the full path `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`.
    - Creates shortcuts on the **Public Desktop** and **Start Menu** (`Start -> All Apps -> Roblox Touchscreen Switch`) for all accounts on the PC.
 4. Switch to your Standard User / Child Account and launch **Roblox Touchscreen Switch** from the Desktop, Start Menu, **Xbox PC App / Full Screen Experience**, **MSI Center M**, or **ASUS Armoury Crate SE**!
 
 ---
 
-## 🧪 Verification & Diagnostics
+## Verification & Diagnostics
 
 Run **`Run-Compatibility-Check.bat`** from either an Administrator or Standard User account to verify:
-- Single `HID-compliant touch screen` hardware detection
+- Single touchscreen (`HID_DEVICE_UP:000D_U:0004`) hardware detection
 - Installed binary and worker script presence
-- NTFS ACL write-protection against standard users
+- NTFS ACL write-protection and anti-ReparsePoint verification on both `C:\Program Files\RobloxTouchscreenSwitch` and `C:\ProgramData\RobloxTouchscreenSwitch`
 - Scheduled Task SDDL (`(A;;GRGX;;;AU)`) permissions
-- Activity log (`C:\ProgramData\RobloxTouchscreenSwitch\activity.log`) status
-
-### Sample Activity Log (Verified on ASUS ROG Ally Z1 Extreme)
-```text
-[2026-11-04 19:47:18] [GUI:imthi] [INFO] Requesting Scheduled Task '\RobloxTouchscreenSwitch\DisableTouchscreen' for 'MOUSE MODE (Disable Touchscreen)'.
-[2026-11-04 19:47:19] [SYSTEM:Disable] [INFO] Starting scheduled action 'Disable' on ROGALLY.
-[2026-11-04 19:47:19] [SYSTEM:Disable] [INFO] Verified single target touchscreen: FriendlyName='HID-compliant touch screen', InstanceId='HID\NVTK0603&COL01\4&1F1D96E&0&0000', CurrentStatus='OK'.
-[2026-11-04 19:47:20] [SYSTEM:Disable] [SUCCESS] MOUSE MODE ACTIVE: 'HID-compliant touch screen' (HID\NVTK0603&COL01\4&1F1D96E&0&0000) is disabled. External mouse clicks in Roblox are now enabled.
-```
+- Read-only `system-activity.log` accessibility
 
 ---
 
-## 🛟 Emergency Touchscreen Recovery & Uninstallation
+## Emergency Touchscreen Recovery & Uninstallation
 
 If your external mouse is unplugged while in **MOUSE MODE**:
 1. **Shortcut Chord**: With the app window focused, press **`Ctrl + Alt + Shift + T`** on an attached keyboard.
@@ -80,6 +74,6 @@ If your external mouse is unplugged while in **MOUSE MODE**:
 
 ---
 
-## 📄 License
+## License
 
-Released under the [MIT License](LICENSE). Free to use, share, and modify!
+Released under the [MIT License](LICENSE). See [CHANGELOG.md](CHANGELOG.md) for full release notes and security hardening details.
