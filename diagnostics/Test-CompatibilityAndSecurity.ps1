@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Continue'
 $InstallDir  = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch'
 $DataDir     = Join-Path $env:ProgramData  'RobloxTouchscreenSwitch'
 $VersionFile = Join-Path $InstallDir 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.1' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.2' }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - COMPATIBILITY & SECURITY AUDIT" -ForegroundColor Cyan
@@ -92,11 +92,24 @@ foreach ($ProtectedPath in @($InstallDir, $DataDir)) {
             $Acl = Get-Acl -LiteralPath $ProtectedPath
             $OwnerSid = $Acl.GetOwner([System.Security.Principal.SecurityIdentifier])
             $TrustedOwner = ($OwnerSid -eq $SidSystem) -or ($OwnerSid -eq $SidAdmins)
-            $UnsafeRules = @($Acl.Access | Where-Object {
-                ($_.IdentityReference.Value -match 'Users|Everyone|Authenticated Users') -and
-                ($_.FileSystemRights.ToString() -match 'Write|Modify|FullControl|Delete') -and
-                ($_.AccessControlType -eq 'Allow')
-            })
+            $WriteMask = [System.Security.AccessControl.FileSystemRights]::Write -bor `
+                         [System.Security.AccessControl.FileSystemRights]::Modify -bor `
+                         [System.Security.AccessControl.FileSystemRights]::Delete -bor `
+                         [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor `
+                         [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor `
+                         [System.Security.AccessControl.FileSystemRights]::TakeOwnership -bor `
+                         [System.Security.AccessControl.FileSystemRights]::FullControl
+            $UnsafeRules = @()
+            foreach ($rule in $Acl.Access) {
+                if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) {
+                    if (([int]$rule.FileSystemRights -band [int]$WriteMask) -ne 0) {
+                        $RuleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier])
+                        if ($RuleSid -ne $SidSystem -and $RuleSid -ne $SidAdmins) {
+                            $UnsafeRules += $rule
+                        }
+                    }
+                }
+            }
             if (-not $IsReparse -and $TrustedOwner -and $UnsafeRules.Count -eq 0) {
                 Report-Check 'PASS' "Owner & NTFS Lockdown Verified on '$ProtectedPath'" "Owned by Admin/SYSTEM; Standard Users have Read-Only access."
             } else {

@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 $ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $PackageRoot = Split-Path -Parent $ScriptRoot
 $VersionFile = Join-Path $PackageRoot 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.1' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.2' }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - WINDOWS 11 ADMIN INSTALLER" -ForegroundColor Cyan
@@ -214,17 +214,17 @@ Set-Acl -LiteralPath $InstallDir -AclObject $Acl
 Get-ChildItem -LiteralPath $InstallDir -Recurse -Force | ForEach-Object {
     $ItemAcl = Get-Acl -LiteralPath $_.FullName
     $ItemAcl.SetOwner($SidAdmins)
-    $ItemAcl.SetAccessRuleProtection($false, $true)
+    # ($false, $false) enables inheritance AND removes any explicit ACEs on child files
+    $ItemAcl.SetAccessRuleProtection($false, $false)
     Set-Acl -LiteralPath $_.FullName -AclObject $ItemAcl
 }
 Write-Host "  [OK] Locked Owner (Administrators) & NTFS ACLs on '$InstallDir'." -ForegroundColor Green
 
-# 4. Recreate Clean ProgramData Folder, Enforce Administrators Ownership, and Lock NTFS ACLs
-#    (Eliminates pre-creation folder ownership takeover and pre-planted hardlinks/symlinks)
+# 4. Atomically Create Clean ProgramData Folder with Locked Security Descriptor
+#    ([System.IO.Directory]::CreateDirectory($DataDir, $DataAcl) eliminates the New-Item -> Set-Acl race window)
 Write-Host ""
 Write-Host "[4/6] Configuring Tamper-Proof SYSTEM Audit Log & Status Directory ($DataDir)..." -ForegroundColor Yellow
 Remove-DirectorySafely -TargetPath $DataDir
-New-Item -Path $DataDir -ItemType Directory -Force | Out-Null
 
 $DataAcl = New-Object System.Security.AccessControl.DirectorySecurity
 $DataAcl.SetOwner($SidAdmins)
@@ -232,17 +232,22 @@ $DataAcl.SetAccessRuleProtection($true, $false)
 $DataAcl.AddAccessRule($RuleSystem)
 $DataAcl.AddAccessRule($RuleAdmins)
 $DataAcl.AddAccessRule($RuleUsers)
+
+[System.IO.Directory]::CreateDirectory($DataDir, $DataAcl) | Out-Null
 Set-Acl -LiteralPath $DataDir -AclObject $DataAcl
+
+$UnexpectedFiles = @(Get-ChildItem -LiteralPath $DataDir -Force -ErrorAction SilentlyContinue)
+if ($UnexpectedFiles.Count -gt 0) {
+    throw "SECURITY ABORT: Newly created '$DataDir' was not empty ($($UnexpectedFiles.Count) unexpected item(s) found)."
+}
 
 $InitLogLine = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [INSTALLER] [INFO] Installed Roblox Touchscreen Switch v$AppVersion on $env:COMPUTERNAME by Administrator '$env:USERNAME'."
 [System.IO.File]::WriteAllText($LogPath, ($InitLogLine + "`r`n"), $Utf8NoBom)
 
-Get-ChildItem -LiteralPath $DataDir -Recurse -Force | ForEach-Object {
-    $ItemAcl = Get-Acl -LiteralPath $_.FullName
-    $ItemAcl.SetOwner($SidAdmins)
-    $ItemAcl.SetAccessRuleProtection($false, $true)
-    Set-Acl -LiteralPath $_.FullName -AclObject $ItemAcl
-}
+$LogItemAcl = Get-Acl -LiteralPath $LogPath
+$LogItemAcl.SetOwner($SidAdmins)
+$LogItemAcl.SetAccessRuleProtection($false, $false)
+Set-Acl -LiteralPath $LogPath -AclObject $LogItemAcl
 Write-Host "  [OK] Cleanly created '$DataDir', set Owner to Administrators, and locked Standard Users to Read-Only." -ForegroundColor Green
 
 # 5. Register Narrowly Restricted SYSTEM Scheduled Tasks with Full PowerShell Path

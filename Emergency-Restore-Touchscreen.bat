@@ -1,9 +1,9 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 title Roblox Touchscreen Switch - Emergency Touch Recovery
 
 echo ======================================================================
-echo   EMERGENCY TOUCHSCREEN RECOVERY (WINDOWS 11)
+echo   EMERGENCY TOUCHSCREEN RECOVERY (WINDOWS 11 - v1.2.2)
 echo ======================================================================
 echo.
 
@@ -11,12 +11,12 @@ if /I "%~1"=="--elevated" goto :ElevatedRecovery
 
 echo [Step 1] Attempting to restore touchscreen via Scheduled Task (No Admin Password needed)...
 "%SystemRoot%\System32\schtasks.exe" /Run /TN "\RobloxTouchscreenSwitch\EnableTouchscreen" >nul 2>&1
-if %errorLevel% equ 0 (
+if not errorlevel 1 (
     timeout /t 3 /nobreak >nul
     "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command ^
         "$devs = @(Get-CimInstance -Namespace 'root\CIMV2' -ClassName 'Win32_PnPEntity' -Filter \"PNPClass = 'HIDClass'\" | Where-Object { ($_.Name -eq 'HID-compliant touch screen') -or (($_.HardwareID + $_.CompatibleID) -imatch 'HID_DEVICE_UP:000D_U:0004') }); " ^
         "if ($devs.Count -gt 0 -and @($devs | Where-Object { $_.ConfigManagerErrorCode -ne 0 -or $_.Status -ne 'OK' }).Count -eq 0) { Write-Host '[VERIFIED] Touchscreen is enabled and healthy (ErrorCode=0, Status=OK).' -ForegroundColor Green; exit 0 } else { Write-Host '[WARN] Touchscreen is still not reporting Status=OK (Code 0). Proceeding to direct Administrator recovery...' -ForegroundColor Yellow; exit 1 }"
-    if %errorLevel% equ 0 (
+    if not errorlevel 1 (
         echo.
         pause
         exit /b 0

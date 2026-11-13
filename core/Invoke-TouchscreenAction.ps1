@@ -1,21 +1,23 @@
 <#
 .SYNOPSIS
-    Roblox Touchscreen Switch - Protected SYSTEM Worker Script (v1.2.1)
+    Roblox Touchscreen Switch - Protected SYSTEM Worker Script (v1.2.2)
 .DESCRIPTION
     Executes strictly under NT AUTHORITY\SYSTEM via Windows Scheduled Tasks:
       - \RobloxTouchscreenSwitch\DisableTouchscreen (Mouse Mode)
       - \RobloxTouchscreenSwitch\EnableTouchscreen  (Restore Touch)
       - \RobloxTouchscreenSwitch\RestoreTouchOnBoot (Safety Startup Recovery)
 
-    SECURITY & RELIABILITY ARCHITECTURE (v1.2.1):
+    SECURITY & RELIABILITY ARCHITECTURE (v1.2.2):
     1. Dynamic Environment Paths: Uses $env:ProgramFiles and $env:ProgramData.
-    2. Zero Recursive Deletes as SYSTEM & Strict $script:DataDirTrusted Gate:
-       - If $env:ProgramData\RobloxTouchscreenSwitch is missing, creates it and locks Owner/ACLs before any child exists.
-       - If it already exists, verifies it is NOT a ReparsePoint AND is owned by SYSTEM (S-1-5-18) or Administrators (S-1-5-32-544).
-       - If ownership or ReparsePoint checks fail, NEVER deletes anything as SYSTEM; leaves $script:DataDirTrusted = $false
-         and exits immediately with code 45 so neither Write-SystemLog nor Save-StateReport writes a single byte.
-    3. UTF-8 Without BOM: Writes status.json and system-activity.log using UTF8Encoding($false) for 100% serializer compatibility.
-    4. Best-Effort Multi-Node Toggling: Attempts Disable/Enable on every target node before evaluating combined state.
+    2. Atomic Directory Creation & Strict SID Allowlist Verification:
+       - If $env:ProgramData\RobloxTouchscreenSwitch is missing, creates it atomically in a single call
+         via [System.IO.Directory]::CreateDirectory($DataDir, $DataAcl) and verifies it is empty.
+       - Verifies the folder is NOT a ReparsePoint, is owned by SYSTEM (S-1-5-18) or Administrators (S-1-5-32-544),
+         and enforces a strict SID Allowlist: any Allow rule granting Write/Modify/Delete/ChangePermissions
+         to ANY SID other than S-1-5-18 or S-1-5-32-544 triggers an immediate abort (Exit Code 45).
+    3. Strict $script:DataDirTrusted Gate: Refuses to write a single byte if DataDir fails verification.
+    4. Two-Pass All-or-Nothing Pre-Check on Disable: Checks all target nodes for driver faults before
+       disabling any node so a faulted node never leaves sibling nodes partially disabled.
 #>
 [CmdletBinding()]
 param(
@@ -28,7 +30,7 @@ $ErrorActionPreference = 'Stop'
 
 $InstallDir  = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch'
 $VersionFile = Join-Path $InstallDir 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.1' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.2' }
 $ConfigPath  = Join-Path $InstallDir 'config.json'
 $DataDir     = Join-Path $env:ProgramData 'RobloxTouchscreenSwitch'
 $StatusPath  = Join-Path $DataDir 'status.json'
@@ -40,12 +42,19 @@ $SidAdmins = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-5
 $SidUsers  = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-# Gate flag: Write-SystemLog and Save-StateReport are strictly no-ops until DataDir is verified trusted
+# Write-related FileSystemRights bitmask (WriteData, CreateFiles, AppendData, WriteEA, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles, Write, Modify, ChangePermissions, TakeOwnership, FullControl)
+$WriteRightsMask = [System.Security.AccessControl.FileSystemRights]::Write -bor `
+                   [System.Security.AccessControl.FileSystemRights]::Modify -bor `
+                   [System.Security.AccessControl.FileSystemRights]::Delete -bor `
+                   [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor `
+                   [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor `
+                   [System.Security.AccessControl.FileSystemRights]::TakeOwnership -bor `
+                   [System.Security.AccessControl.FileSystemRights]::FullControl
+
 $script:DataDirTrusted = $false
 
 function Initialize-LockedDataDir {
     if (-not (Test-Path -LiteralPath $DataDir)) {
-        New-Item -Path $DataDir -ItemType Directory -Force | Out-Null
         $InheritFlags = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
         $PropFlags    = [System.Security.AccessControl.PropagationFlags]::None
         $RuleSystem = New-Object System.Security.AccessControl.FileSystemAccessRule($SidSystem, [System.Security.AccessControl.FileSystemRights]::FullControl, $InheritFlags, $PropFlags, [System.Security.AccessControl.AccessControlType]::Allow)
@@ -58,7 +67,14 @@ function Initialize-LockedDataDir {
         $DataAcl.AddAccessRule($RuleSystem)
         $DataAcl.AddAccessRule($RuleAdmins)
         $DataAcl.AddAccessRule($RuleUsers)
-        Set-Acl -LiteralPath $DataDir -AclObject $DataAcl
+
+        # Atomic single-call directory creation with locked security descriptor (zero race window)
+        [System.IO.Directory]::CreateDirectory($DataDir, $DataAcl) | Out-Null
+
+        $PreExistingItems = @(Get-ChildItem -LiteralPath $DataDir -Force -ErrorAction SilentlyContinue)
+        if ($PreExistingItems.Count -gt 0) {
+            throw "SECURITY ABORT: Newly created '$DataDir' was not empty. Re-run Install-RobloxTouchSwitch.bat as Administrator."
+        }
     }
 
     $Item = Get-Item -LiteralPath $DataDir -Force
@@ -69,17 +85,20 @@ function Initialize-LockedDataDir {
     $CurrentAcl = Get-Acl -LiteralPath $DataDir
     $OwnerSid = $CurrentAcl.GetOwner([System.Security.Principal.SecurityIdentifier])
     if ($OwnerSid -ne $SidSystem -and $OwnerSid -ne $SidAdmins) {
-        # NEVER recursively delete an untrusted directory as SYSTEM (PowerShell 5.1 junction vulnerability).
         throw "SECURITY ABORT: '$DataDir' is owned by untrusted SID '$($OwnerSid.Value)'. Re-run Install-RobloxTouchSwitch.bat as Administrator."
     }
 
-    $UnsafeRules = @($CurrentAcl.Access | Where-Object {
-        ($_.IdentityReference.Value -match 'Users|Everyone|Authenticated Users') -and
-        ($_.FileSystemRights.ToString() -match 'Write|Modify|FullControl|Delete|CreateFiles|AppendData') -and
-        ($_.AccessControlType -eq 'Allow')
-    })
-    if ($UnsafeRules.Count -gt 0) {
-        throw "SECURITY ABORT: '$DataDir' has writable ACL rules for non-administrators. Re-run Install-RobloxTouchSwitch.bat as Administrator."
+    # Strict Allowlist Check: Fail closed if ANY Allow rule with write/delete/permission rights belongs to a SID other than SYSTEM or Administrators
+    foreach ($rule in $CurrentAcl.Access) {
+        if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) {
+            $HasWrite = ([int]$rule.FileSystemRights -band [int]$WriteRightsMask) -ne 0
+            if ($HasWrite) {
+                $RuleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier])
+                if ($RuleSid -ne $SidSystem -and $RuleSid -ne $SidAdmins) {
+                    throw "SECURITY ABORT: '$DataDir' grants write/modify rights to untrusted SID '$($RuleSid.Value)'. Re-run Install-RobloxTouchSwitch.bat as Administrator."
+                }
+            }
+        }
     }
 
     $script:DataDirTrusted = $true
@@ -99,6 +118,17 @@ function Test-SafeTargetFile {
         $FileOwner = $FileAcl.GetOwner([System.Security.Principal.SecurityIdentifier])
         if ($FileOwner -ne $SidSystem -and $FileOwner -ne $SidAdmins) {
             throw "SECURITY ABORT: '$FilePath' is owned by untrusted SID '$($FileOwner.Value)'."
+        }
+        foreach ($rule in $FileAcl.Access) {
+            if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) {
+                $HasWrite = ([int]$rule.FileSystemRights -band [int]$WriteRightsMask) -ne 0
+                if ($HasWrite) {
+                    $RuleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier])
+                    if ($RuleSid -ne $SidSystem -and $RuleSid -ne $SidAdmins) {
+                        throw "SECURITY ABORT: '$FilePath' grants write rights to untrusted SID '$($RuleSid.Value)'."
+                    }
+                }
+            }
         }
         $FsUtil = Join-Path $env:SystemRoot 'System32\fsutil.exe'
         if (Test-Path -LiteralPath $FsUtil) {
@@ -253,15 +283,34 @@ try {
 
     if ($Action -eq 'Disable') {
         $PreFaults = @()
-        $ToggleErrors = @()
+        $FirstFaultCode = 32
+        $FirstFaultStatus = 'DriverError'
 
-        # Best-effort loop across all target nodes so a fault on one node does not skip remaining nodes
+        # Pass 1 (All-or-Nothing Pre-Check): Inspect ALL target nodes for non-0, non-22 driver faults BEFORE disabling anything
+        foreach ($dev in $TargetDevices) {
+            $ErrCode = [int]$dev.ConfigManagerErrorCode
+            if ($ErrCode -ne 0 -and $ErrCode -ne 22) {
+                $PreFaults += "$($dev.DeviceID) (Code $ErrCode, Status='$($dev.Status)')"
+                if ($FirstFaultCode -eq 32) {
+                    $FirstFaultCode = $ErrCode
+                    $FirstFaultStatus = [string]$dev.Status
+                }
+            }
+        }
+
+        if ($PreFaults.Count -gt 0) {
+            $DriverMsg = "Touchscreen node(s) reported hardware/driver error before disable: $($PreFaults -join '; '). Aborting without disabling healthy nodes."
+            Write-SystemLog -Level 'ERROR' -Message $DriverMsg
+            Save-StateReport -ResultCode 'ERR_DRIVER_FAULT' -TouchState 'DRIVER_ERROR' -DeviceStatus $FirstFaultStatus -ErrorCode $FirstFaultCode -InstanceId $IdsSummary -Message $DriverMsg -MatchedCount $TargetDevices.Count
+            exit 32
+        }
+
+        # Pass 2: All target nodes are verified healthy (Code 0) or already disabled (Code 22) — now disable each node
+        $ToggleErrors = @()
         foreach ($dev in $TargetDevices) {
             $ErrCode = [int]$dev.ConfigManagerErrorCode
             if ($ErrCode -eq 22) {
                 Write-SystemLog -Level 'INFO' -Message "Touchscreen '$($dev.DeviceID)' is already disabled (Code 22)."
-            } elseif ($ErrCode -ne 0) {
-                $PreFaults += "$($dev.DeviceID) (Code $ErrCode, Status='$($dev.Status)')"
             } else {
                 try {
                     Disable-PnpDevice -InstanceId $dev.DeviceID -Confirm:$false -ErrorAction Stop
@@ -269,13 +318,6 @@ try {
                     $ToggleErrors += "$($dev.DeviceID): $($_.Exception.Message)"
                 }
             }
-        }
-
-        if ($PreFaults.Count -gt 0) {
-            $DriverMsg = "Touchscreen node(s) reported hardware/driver error before disable: $($PreFaults -join '; '). Refusing to mask driver fault as Mouse Mode."
-            Write-SystemLog -Level 'ERROR' -Message $DriverMsg
-            Save-StateReport -ResultCode 'ERR_DRIVER_FAULT' -TouchState 'DRIVER_ERROR' -DeviceStatus 'DriverError' -ErrorCode 32 -InstanceId $IdsSummary -Message $DriverMsg -MatchedCount $TargetDevices.Count
-            exit 32
         }
 
         # Poll up to 2.5 seconds (10 x 250ms) for all target nodes to report ErrorCode == 22
@@ -372,7 +414,6 @@ try {
         Save-StateReport -ResultCode 'ERR_FATAL_WORKER' -TouchState 'UNKNOWN' -DeviceStatus 'Exception' -ErrorCode -99 -InstanceId '' -Message $FatalText -MatchedCount 0
         exit 40
     } else {
-        # DataDir failed ownership/ReparsePoint verification — do NOT write to untrusted path!
         exit 45
     }
 }

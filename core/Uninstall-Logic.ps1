@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Continue'
 $ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $PackageRoot = Split-Path -Parent $ScriptRoot
 $VersionFile = Join-Path $PackageRoot 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.1' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.2' }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - ADMINISTRATOR UNINSTALLER" -ForegroundColor Cyan
