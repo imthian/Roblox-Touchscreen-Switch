@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Continue'
 $InstallDir  = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch'
 $DataDir     = Join-Path $env:ProgramData  'RobloxTouchscreenSwitch'
 $VersionFile = Join-Path $InstallDir 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.0' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.1' }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - COMPATIBILITY & SECURITY AUDIT" -ForegroundColor Cyan

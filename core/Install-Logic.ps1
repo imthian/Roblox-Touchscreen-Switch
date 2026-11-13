@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 $ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $PackageRoot = Split-Path -Parent $ScriptRoot
 $VersionFile = Join-Path $PackageRoot 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.0' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.1' }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - WINDOWS 11 ADMIN INSTALLER" -ForegroundColor Cyan
@@ -108,9 +108,25 @@ Write-Host "[2/6] Creating Protected Program Directory & Applying Security ACLs.
 
 Get-Process -Name 'RobloxTouchSwitch' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-if (Test-Path -LiteralPath $InstallDir) {
-    Remove-Item -LiteralPath $InstallDir -Recurse -Force
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+function Remove-DirectorySafely {
+    param([string]$TargetPath)
+    if (-not (Test-Path -LiteralPath $TargetPath)) { return }
+    $RootItem = Get-Item -LiteralPath $TargetPath -Force
+    if (($RootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "SECURITY ABORT: '$TargetPath' is a ReparsePoint (symlink/junction). Inspect and remove it manually as Administrator."
+    }
+    $ChildLinks = @(Get-ChildItem -LiteralPath $TargetPath -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
+        ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    })
+    if ($ChildLinks.Count -gt 0) {
+        throw "SECURITY ABORT: '$TargetPath' contains $($ChildLinks.Count) nested ReparsePoint(s) (symlinks/junctions). Inspect and remove it manually as Administrator."
+    }
+    [System.IO.Directory]::Delete($TargetPath, $true)
 }
+
+Remove-DirectorySafely -TargetPath $InstallDir
 New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $ScriptRoot 'Invoke-TouchscreenAction.ps1') -Destination (Join-Path $InstallDir 'Invoke-TouchscreenAction.ps1') -Force
@@ -136,7 +152,7 @@ $ConfigObj = [ordered]@{
     PinnedInstanceId  = $PrimaryPin
     PinnedInstanceIds = $PinnedInstanceIds
 }
-$ConfigObj | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $InstallDir 'config.json') -Encoding UTF8 -Force
+[System.IO.File]::WriteAllText((Join-Path $InstallDir 'config.json'), ($ConfigObj | ConvertTo-Json -Depth 4), $Utf8NoBom)
 
 # Compile RobloxTouchSwitch.exe using built-in Windows .NET Framework csc.exe
 Write-Host ""
@@ -207,9 +223,7 @@ Write-Host "  [OK] Locked Owner (Administrators) & NTFS ACLs on '$InstallDir'." 
 #    (Eliminates pre-creation folder ownership takeover and pre-planted hardlinks/symlinks)
 Write-Host ""
 Write-Host "[4/6] Configuring Tamper-Proof SYSTEM Audit Log & Status Directory ($DataDir)..." -ForegroundColor Yellow
-if (Test-Path -LiteralPath $DataDir) {
-    Remove-Item -LiteralPath $DataDir -Recurse -Force
-}
+Remove-DirectorySafely -TargetPath $DataDir
 New-Item -Path $DataDir -ItemType Directory -Force | Out-Null
 
 $DataAcl = New-Object System.Security.AccessControl.DirectorySecurity
@@ -221,7 +235,7 @@ $DataAcl.AddAccessRule($RuleUsers)
 Set-Acl -LiteralPath $DataDir -AclObject $DataAcl
 
 $InitLogLine = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [INSTALLER] [INFO] Installed Roblox Touchscreen Switch v$AppVersion on $env:COMPUTERNAME by Administrator '$env:USERNAME'."
-Set-Content -LiteralPath $LogPath -Value $InitLogLine -Encoding UTF8 -Force
+[System.IO.File]::WriteAllText($LogPath, ($InitLogLine + "`r`n"), $Utf8NoBom)
 
 Get-ChildItem -LiteralPath $DataDir -Recurse -Force | ForEach-Object {
     $ItemAcl = Get-Acl -LiteralPath $_.FullName

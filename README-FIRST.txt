@@ -1,5 +1,5 @@
 ========================================================================
-ROBLOX TOUCHSCREEN SWITCH (v1.2.0) - QUICK START README
+ROBLOX TOUCHSCREEN SWITCH (v1.2.1) - QUICK START README
 Target Devices: MSI Claw A1M (Intel), ASUS ROG Ally Z1 Extreme, & Windows 11 Handhelds
 ========================================================================
 
@@ -15,15 +15,17 @@ Target Devices: MSI Claw A1M (Intel), ASUS ROG Ally Z1 Extreme, & Windows 11 Han
    - Uninstall-RobloxTouchSwitch.bat   : Run as Administrator to cleanly remove.
    - Emergency-Restore-Touchscreen.bat : Immediate recovery tool to re-enable touch.
    - Run-Compatibility-Check.bat       : Verifies hardware, Owner/ACLs, and task security.
-   - VERSION                           : Single-source version file (1.2.0).
-   - CHANGELOG.md                      : Full release history and v1.2.0 security notes.
+   - VERSION                           : Single-source version file (1.2.1).
+   - CHANGELOG.md                      : Full release history and v1.2.1 security notes.
    - core\Invoke-TouchscreenAction.ps1 : Protected SYSTEM worker with hardware safeguards.
    - core\RobloxTouchSwitchApp.cs      : Native Windows 11 GUI source (compiled on install).
    - assets\RobloxTouchSwitch.ico      : Application icon for Desktop & Start Menu.
    - assets\Xbox_Library_CoverArt.png  : Poster art for Xbox PC App / Handheld Launchers.
 
 3. QUICK INSTALLATION (ON MSI CLAW A1M OR ASUS ROG ALLY)
-   Step 1: Extract this entire ZIP folder to a local folder (e.g., Desktop or Downloads).
+   Step 1: Extract this entire ZIP folder inside your Administrator account's own profile
+           (e.g., C:\Users\<AdminUser>\Downloads\RobloxTouchscreenSwitch) — never in a
+           shared or child-writable folder before running the installer.
    Step 2: Right-click "Install-RobloxTouchSwitch.bat" and select "Run as administrator".
    Step 3: Switch to your son's Standard Microsoft Child account. He can now launch
            "Roblox Touchscreen Switch" from the Desktop, Start Menu, or Xbox App

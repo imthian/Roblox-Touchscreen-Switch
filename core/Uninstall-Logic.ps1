@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Continue'
 $ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $PackageRoot = Split-Path -Parent $ScriptRoot
 $VersionFile = Join-Path $PackageRoot 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.0' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.1' }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - ADMINISTRATOR UNINSTALLER" -ForegroundColor Cyan
@@ -28,20 +28,46 @@ if (-not $CurrentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
     exit 1
 }
 
-Write-Host "[1/4] Restoring touchscreen before uninstalling..." -ForegroundColor Yellow
+Write-Host "[1/4] Restoring touchscreen before uninstalling (respecting PinnedInstanceIds & single-device safeguard)..." -ForegroundColor Yellow
 try {
     Import-Module PnpDevice -ErrorAction SilentlyContinue
+    $ConfigPath = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch\config.json'
+    $PinnedIds = @()
+    if (Test-Path -LiteralPath $ConfigPath) {
+        try {
+            $Cfg = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($Cfg.PinnedInstanceIds) {
+                $PinnedIds = @($Cfg.PinnedInstanceIds | Where-Object { $_ -and $_.ToString().Trim().Length -gt 0 })
+            } elseif ($Cfg.PinnedInstanceId -and $Cfg.PinnedInstanceId.ToString().Trim().Length -gt 0) {
+                $PinnedIds = @($Cfg.PinnedInstanceId.ToString().Trim())
+            }
+        } catch { }
+    }
+
     $WmiDevices = @(Get-CimInstance -Namespace 'root\CIMV2' -ClassName 'Win32_PnPEntity' -Filter "PNPClass = 'HIDClass'" -ErrorAction SilentlyContinue)
+    $AllTouch = @()
     foreach ($d in $WmiDevices) {
         $IsTouch = ($d.Name -eq 'HID-compliant touch screen') -or (($d.HardwareID + $d.CompatibleID) -imatch 'HID_DEVICE_UP:000D_U:0004')
-        if ($IsTouch) {
-            if ($d.ConfigManagerErrorCode -eq 22 -or $d.Status -ne 'OK') {
-                Enable-PnpDevice -InstanceId $d.DeviceID -Confirm:$false -ErrorAction SilentlyContinue
-                Write-Host "  [OK] Re-enabled touchscreen: $($d.DeviceID)" -ForegroundColor Green
+        if ($IsTouch) { $AllTouch += $d }
+    }
+
+    if ($PinnedIds.Count -gt 0) {
+        foreach ($pin in $PinnedIds) {
+            $Matched = @($AllTouch | Where-Object { $_.DeviceID -ieq $pin })
+            if ($Matched.Count -eq 1) {
+                Enable-PnpDevice -InstanceId $Matched[0].DeviceID -Confirm:$false -ErrorAction SilentlyContinue
+                Write-Host "  [OK] Re-enabled pinned touchscreen: $($Matched[0].DeviceID)" -ForegroundColor Green
             } else {
-                Write-Host "  [OK] Touchscreen is already enabled: $($d.DeviceID)" -ForegroundColor Green
+                Write-Host "  [WARN] Pinned touchscreen '$pin' is not currently connected; skipping automatic enable." -ForegroundColor Yellow
             }
         }
+    } elseif ($AllTouch.Count -eq 1) {
+        Enable-PnpDevice -InstanceId $AllTouch[0].DeviceID -Confirm:$false -ErrorAction SilentlyContinue
+        Write-Host "  [OK] Re-enabled single touchscreen: $($AllTouch[0].DeviceID)" -ForegroundColor Green
+    } elseif ($AllTouch.Count -gt 1) {
+        Write-Host "  [SAFEGUARD] Multiple ($($AllTouch.Count)) unpinned touchscreens found; skipping automatic bulk enable during uninstall." -ForegroundColor Yellow
+    } else {
+        Write-Host "  [INFO] No touchscreen device currently detected." -ForegroundColor Gray
     }
 } catch {
     Write-Host "  [WARN] Could not verify PnP state during uninstall: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -78,17 +104,30 @@ Write-Host "[4/4] Removing Application Files..." -ForegroundColor Yellow
 $InstallDir = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch'
 $DataDir    = Join-Path $env:ProgramData  'RobloxTouchscreenSwitch'
 
-if (Test-Path -LiteralPath $InstallDir) {
-    Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "  [OK] Removed '$InstallDir'." -ForegroundColor Green
+function Remove-DirectorySafely {
+    param([string]$TargetPath)
+    if (-not (Test-Path -LiteralPath $TargetPath)) { return }
+    $RootItem = Get-Item -LiteralPath $TargetPath -Force
+    if (($RootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        Write-Host "  [SECURITY SKIP] '$TargetPath' is a ReparsePoint. Skipping automatic deletion." -ForegroundColor Red
+        return
+    }
+    $ChildLinks = @(Get-ChildItem -LiteralPath $TargetPath -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
+        ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    })
+    if ($ChildLinks.Count -gt 0) {
+        Write-Host "  [SECURITY SKIP] '$TargetPath' contains nested ReparsePoints. Skipping automatic deletion." -ForegroundColor Red
+        return
+    }
+    [System.IO.Directory]::Delete($TargetPath, $true)
+    Write-Host "  [OK] Removed '$TargetPath'." -ForegroundColor Green
 }
+
+Remove-DirectorySafely -TargetPath $InstallDir
 
 $DeleteLogsPrompt = Read-Host "Do you want to delete the SYSTEM audit logs in '$DataDir'? [Y/N] (Default: Y)"
 if ($DeleteLogsPrompt -eq '' -or $DeleteLogsPrompt -match '^[Yy]') {
-    if (Test-Path -LiteralPath $DataDir) {
-        Remove-Item -LiteralPath $DataDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "  [OK] Removed '$DataDir'." -ForegroundColor Green
-    }
+    Remove-DirectorySafely -TargetPath $DataDir
 } else {
     Write-Host "  [INFO] Retained SYSTEM audit logs in '$DataDir'." -ForegroundColor Cyan
 }

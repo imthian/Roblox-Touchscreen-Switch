@@ -83,7 +83,7 @@ namespace RobloxTouchscreenSwitch
             ConfigPath    = Path.Combine(InstallDir, "config.json");
 
             string verFile = Path.Combine(InstallDir, "VERSION");
-            AppVersion = File.Exists(verFile) ? File.ReadAllText(verFile, Encoding.UTF8).Trim() : "1.2.0";
+            AppVersion = File.Exists(verFile) ? File.ReadAllText(verFile, Encoding.UTF8).Trim() : "1.2.1";
 
             UserDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RobloxTouchscreenSwitch");
             UserLogPath = Path.Combine(UserDataDir, "gui-activity.log");
@@ -376,6 +376,16 @@ namespace RobloxTouchscreenSwitch
             catch { }
         }
 
+        private static MemoryStream CreateBomFreeJsonStream(string path)
+        {
+            string text = File.ReadAllText(path, Encoding.UTF8);
+            if (!string.IsNullOrEmpty(text) && text[0] == '\uFEFF')
+            {
+                text = text.Substring(1);
+            }
+            return new MemoryStream(Encoding.UTF8.GetBytes(text.Trim()));
+        }
+
         private List<string> GetPinnedInstanceIds()
         {
             List<string> pins = new List<string>();
@@ -383,9 +393,8 @@ namespace RobloxTouchscreenSwitch
             {
                 if (File.Exists(ConfigPath))
                 {
-                    byte[] bytes = File.ReadAllBytes(ConfigPath);
                     DataContractJsonSerializer ser = new DataContractJsonSerializer(typeof(AppConfigData));
-                    using (MemoryStream ms = new MemoryStream(bytes))
+                    using (MemoryStream ms = CreateBomFreeJsonStream(ConfigPath))
                     {
                         AppConfigData cfg = ser.ReadObject(ms) as AppConfigData;
                         if (cfg != null)
@@ -415,9 +424,8 @@ namespace RobloxTouchscreenSwitch
             {
                 if (File.Exists(StatusPath))
                 {
-                    byte[] bytes = File.ReadAllBytes(StatusPath);
                     DataContractJsonSerializer ser = new DataContractJsonSerializer(typeof(WorkerStatusReport));
-                    using (MemoryStream ms = new MemoryStream(bytes))
+                    using (MemoryStream ms = CreateBomFreeJsonStream(StatusPath))
                     {
                         return ser.ReadObject(ms) as WorkerStatusReport;
                     }
@@ -758,8 +766,10 @@ namespace RobloxTouchscreenSwitch
                 else
                 {
                     WorkerStatusReport updatedReport = null;
-                    for (int attempt = 0; attempt < 18; attempt++)
+                    for (int attempt = 1; attempt <= 40; attempt++)
                     {
+                        double elapsedSec = Math.Round(attempt * 0.3, 1);
+                        lblStatusSubtitle.Text = "Waiting for SYSTEM hardware completion (" + elapsedSec.ToString("0.0") + "s / 12.0s)...";
                         await Task.Delay(300);
                         WorkerStatusReport candidate = ReadStatusReport();
                         if (candidate != null && candidate.TimestampUtc > previousTimestampUtc)
@@ -771,11 +781,15 @@ namespace RobloxTouchscreenSwitch
 
                     if (updatedReport == null)
                     {
-                        AppendUserLog("WARN", "SYSTEM worker did not write an updated status.json within 5.4 seconds for '" + taskFullName + "'.");
+                        AppendUserLog("WARN", "SYSTEM worker timed out (did not update status.json within 12.0 seconds) for '" + taskFullName + "'.");
+                        headerBanner.BackColor = Color.FromArgb(180, 83, 9);
+                        lblStatusTitle.Text = "[!] WORKER TIMEOUT - CHECK SYSTEM LOG";
+                        lblStatusSubtitle.Text = "Scheduled Task launched, but the SYSTEM worker did not report back within 12 seconds.";
                         MessageBox.Show(
-                            "The Scheduled Task was triggered, but the SYSTEM worker did not report back to status.json within 5.4 seconds.\r\n\r\n" +
-                            "Please click 'Open SYSTEM Audit Log' or ask an Administrator to run 'Run-Compatibility-Check.bat' to verify the installation.",
-                            "Worker Did Not Report Back",
+                            "WORKER TIMEOUT (Not a confirmed hardware failure):\r\n\r\n" +
+                            "Task Scheduler accepted '" + taskFullName + "', but the background SYSTEM worker did not finish updating status.json within 12.0 seconds.\r\n\r\n" +
+                            "Click 'Refresh Status' in a few seconds, or click 'Open SYSTEM Audit Log' to inspect progress.",
+                            "Worker Response Timeout",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Warning);
                     }
