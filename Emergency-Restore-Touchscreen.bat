@@ -1,9 +1,9 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
+setlocal EnableExtensions
 title Roblox Touchscreen Switch - Emergency Touch Recovery
 
 echo ======================================================================
-echo   EMERGENCY TOUCHSCREEN RECOVERY (WINDOWS 11 - v1.2.2)
+echo   EMERGENCY TOUCHSCREEN RECOVERY (WINDOWS 11 - v1.2.3)
 echo ======================================================================
 echo.
 

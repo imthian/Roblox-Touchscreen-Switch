@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Continue'
 $InstallDir  = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch'
 $DataDir     = Join-Path $env:ProgramData  'RobloxTouchscreenSwitch'
 $VersionFile = Join-Path $InstallDir 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.2' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.3' }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - COMPATIBILITY & SECURITY AUDIT" -ForegroundColor Cyan
@@ -92,18 +92,16 @@ foreach ($ProtectedPath in @($InstallDir, $DataDir)) {
             $Acl = Get-Acl -LiteralPath $ProtectedPath
             $OwnerSid = $Acl.GetOwner([System.Security.Principal.SecurityIdentifier])
             $TrustedOwner = ($OwnerSid -eq $SidSystem) -or ($OwnerSid -eq $SidAdmins)
-            $WriteMask = [System.Security.AccessControl.FileSystemRights]::Write -bor `
-                         [System.Security.AccessControl.FileSystemRights]::Modify -bor `
-                         [System.Security.AccessControl.FileSystemRights]::Delete -bor `
-                         [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor `
-                         [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor `
-                         [System.Security.AccessControl.FileSystemRights]::TakeOwnership -bor `
-                         [System.Security.AccessControl.FileSystemRights]::FullControl
+            $R = [System.Security.AccessControl.FileSystemRights]
+            $WriteMask = [int]($R::WriteData -bor $R::AppendData -bor $R::WriteExtendedAttributes -bor `
+                               $R::WriteAttributes -bor $R::DeleteSubdirectoriesAndFiles -bor `
+                               $R::Delete -bor $R::ChangePermissions -bor $R::TakeOwnership)
             $UnsafeRules = @()
-            foreach ($rule in $Acl.Access) {
+            $AccessRules = $Acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+            foreach ($rule in $AccessRules) {
                 if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) {
-                    if (([int]$rule.FileSystemRights -band [int]$WriteMask) -ne 0) {
-                        $RuleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier])
+                    if (([int]$rule.FileSystemRights -band $WriteMask) -ne 0) {
+                        $RuleSid = [System.Security.Principal.SecurityIdentifier]$rule.IdentityReference
                         if ($RuleSid -ne $SidSystem -and $RuleSid -ne $SidAdmins) {
                             $UnsafeRules += $rule
                         }

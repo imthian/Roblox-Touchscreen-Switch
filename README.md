@@ -1,7 +1,7 @@
 # Roblox Touchscreen Switch (Windows 11 Handheld Utility)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version: 1.2.1](https://img.shields.io/badge/Version-1.2.1-brightgreen.svg)](CHANGELOG.md)
+[![Version: 1.2.3](https://img.shields.io/badge/Version-1.2.3-brightgreen.svg)](CHANGELOG.md)
 [![Platform: Windows 11](https://img.shields.io/badge/Platform-Windows%2011-0078D6.svg)]()
 [![Devices: MSI Claw | ROG Ally | Legion Go](https://img.shields.io/badge/Devices-MSI%20Claw%20%7C%20ASUS%20ROG%20Ally%20%7C%20Windows%20Handhelds-success.svg)]()
 
@@ -19,7 +19,7 @@ When playing Roblox in docked or desktop mode with an external mouse on Windows 
 
 ---
 
-## What This Utility Does (v1.2.1)
+## What This Utility Does (v1.2.3)
 
 **Roblox Touchscreen Switch** provides a handheld-friendly Windows Forms graphical app (`RobloxTouchSwitch.exe`) backed by narrowly restricted `NT AUTHORITY\SYSTEM` Scheduled Tasks:
 
@@ -41,7 +41,7 @@ When playing Roblox in docked or desktop mode with an external mouse on Windows 
 
 ## Quick Installation
 
-1. Log into your **Administrator account** and extract **`ROBLOX TOUCHSCREEN SWITCH (v1.2.1).zip`** (or clone this repository) inside your **Administrator account's own profile folder** (e.g., `C:\Users\<AdminUser>\Downloads\RobloxTouchscreenSwitch`)—never extract into a shared or child-writable directory before running the installer.
+1. Log into your **Administrator account** and extract **`ROBLOX TOUCHSCREEN SWITCH (v1.2.3).zip`** (or clone this repository) inside your **Administrator account's own profile folder** (e.g., `C:\Users\<AdminUser>\Downloads\RobloxTouchscreenSwitch`)—never extract into a shared or child-writable directory before running the installer.
 2. Right-click **`Install-RobloxTouchSwitch.bat`** and select **Run as administrator**.
 3. The installer automatically:
    - Verifies your touchscreen hardware node(s) (`HID_DEVICE_UP:000D_U:0004`).
@@ -62,8 +62,8 @@ Run **`Run-Compatibility-Check.bat`** from either an Administrator or Standard U
 - Scheduled Task SDDL (`(A;;GRGX;;;AU)`) permissions
 - Read-only `system-activity.log` accessibility
 
-### Release Archive Checksum (v1.2.1)
-- `ROBLOX TOUCHSCREEN SWITCH (v1.2.1).zip` SHA-256: `44c6b9d7e1d41ff4ba74322b33b71af27ad95984abb5966f3403197f5441920e`
+### Release Archive Checksum (v1.2.3)
+- `ROBLOX TOUCHSCREEN SWITCH (v1.2.3).zip` SHA-256: `e4af6ded468eca2695b3cdbe6dc0a2bd69ccf4142aa4fd43f1c60abac0f976a0`
 - Repository file hashes (with Unix LF line endings for `sha256sum -c SHA256SUMS.txt`): see [`SHA256SUMS.txt`](SHA256SUMS.txt).
 
 ---

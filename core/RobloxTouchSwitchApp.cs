@@ -83,7 +83,7 @@ namespace RobloxTouchscreenSwitch
             ConfigPath    = Path.Combine(InstallDir, "config.json");
 
             string verFile = Path.Combine(InstallDir, "VERSION");
-            AppVersion = File.Exists(verFile) ? File.ReadAllText(verFile, Encoding.UTF8).Trim() : "1.2.2";
+            AppVersion = File.Exists(verFile) ? File.ReadAllText(verFile, Encoding.UTF8).Trim() : "1.2.3";
 
             UserDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RobloxTouchscreenSwitch");
             UserLogPath = Path.Combine(UserDataDir, "gui-activity.log");

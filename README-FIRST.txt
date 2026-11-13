@@ -1,5 +1,5 @@
 ========================================================================
-ROBLOX TOUCHSCREEN SWITCH (v1.2.1) - QUICK START README
+ROBLOX TOUCHSCREEN SWITCH (v1.2.3) - QUICK START README
 Target Devices: MSI Claw A1M (Intel), ASUS ROG Ally Z1 Extreme, & Windows 11 Handhelds
 ========================================================================
 
@@ -15,8 +15,8 @@ Target Devices: MSI Claw A1M (Intel), ASUS ROG Ally Z1 Extreme, & Windows 11 Han
    - Uninstall-RobloxTouchSwitch.bat   : Run as Administrator to cleanly remove.
    - Emergency-Restore-Touchscreen.bat : Immediate recovery tool to re-enable touch.
    - Run-Compatibility-Check.bat       : Verifies hardware, Owner/ACLs, and task security.
-   - VERSION                           : Single-source version file (1.2.1).
-   - CHANGELOG.md                      : Full release history and v1.2.1 security notes.
+   - VERSION                           : Single-source version file (1.2.3).
+   - CHANGELOG.md                      : Full release history and v1.2.3 security notes.
    - core\Invoke-TouchscreenAction.ps1 : Protected SYSTEM worker with hardware safeguards.
    - core\RobloxTouchSwitchApp.cs      : Native Windows 11 GUI source (compiled on install).
    - assets\RobloxTouchSwitch.ico      : Application icon for Desktop & Start Menu.

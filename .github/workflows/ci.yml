@@ -1,4 +1,4 @@
-name: CI - PSScriptAnalyzer & C# Build
+name: CI - PSScriptAnalyzer, ACL Pester Test & C# Build
 
 on:
   push:
@@ -26,6 +26,64 @@ jobs:
           if ($errors) {
             throw "PSScriptAnalyzer found $($errors.Count) error(s)."
           }
+
+      - name: Run Pester Test for 0xD0156 ACL Mask Validation
+        shell: pwsh
+        run: |
+          $R = [System.Security.AccessControl.FileSystemRights]
+          $WriteMask = [int]($R::WriteData -bor $R::AppendData -bor $R::WriteExtendedAttributes -bor `
+                             $R::WriteAttributes -bor $R::DeleteSubdirectoriesAndFiles -bor `
+                             $R::Delete -bor $R::ChangePermissions -bor $R::TakeOwnership)
+
+          if ($WriteMask -ne 0xD0156) {
+            throw "WriteMask calculation failed: expected 0xD0156, got 0x$($WriteMask.ToString('X'))"
+          }
+
+          $ReadAndExecute = [int]$R::ReadAndExecute # 0x1200A9
+          if (($ReadAndExecute -band $WriteMask) -ne 0) {
+            throw "FATAL: ReadAndExecute (0x1200A9) overlap with WriteMask (0xD0156) must be 0, got 0x$(($ReadAndExecute -band $WriteMask).ToString('X'))"
+          }
+          Write-Host "PASS: ReadAndExecute & WriteMask test passed (0x1200A9 & 0xD0156 == 0)."
+
+          # Test with real DirectorySecurity object
+          $SidSystem = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
+          $SidAdmins = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+          $SidUsers  = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')
+
+          $sec = New-Object System.Security.AccessControl.DirectorySecurity
+          $sec.SetOwner($SidAdmins)
+          $sec.SetAccessRuleProtection($true, $false)
+          $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($SidSystem, $R::FullControl, 3, 0, 'Allow')))
+          $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($SidAdmins, $R::FullControl, 3, 0, 'Allow')))
+          $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($SidUsers,  $R::ReadAndExecute, 3, 0, 'Allow')))
+
+          $rules = $sec.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+          foreach ($r in $rules) {
+            if ($r.AccessControlType -eq 'Allow' -and (([int]$r.FileSystemRights -band $WriteMask) -ne 0)) {
+              $sid = [System.Security.Principal.SecurityIdentifier]$r.IdentityReference
+              if ($sid -ne $SidSystem -and $sid -ne $SidAdmins) {
+                throw "Validation failed: legitimate Users ReadAndExecute rule flagged as write on SID $($sid.Value)"
+              }
+            }
+          }
+          Write-Host "PASS: Standard locked ACL correctly passed Allowlist check."
+
+          # Assert that adding a real write rule on Users is correctly rejected
+          $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($SidUsers, $R::WriteData, 3, 0, 'Allow')))
+          $flagged = $false
+          $rules2 = $sec.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+          foreach ($r in $rules2) {
+            if ($r.AccessControlType -eq 'Allow' -and (([int]$r.FileSystemRights -band $WriteMask) -ne 0)) {
+              $sid = [System.Security.Principal.SecurityIdentifier]$r.IdentityReference
+              if ($sid -ne $SidSystem -and $sid -ne $SidAdmins) {
+                $flagged = $true
+              }
+            }
+          }
+          if (-not $flagged) {
+            throw "Validation failed: unauthorized WriteData rule was NOT caught by Allowlist check."
+          }
+          Write-Host "PASS: Unauthorized WriteData rule correctly caught by Allowlist check."
 
       - name: Compile C# WinForms GUI with .NET Framework csc.exe
         shell: pwsh
