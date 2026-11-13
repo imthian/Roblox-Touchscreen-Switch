@@ -1,0 +1,6 @@
+# Windows & Build Artifacts
+*.exe
+*.pdb
+*.user
+Thumbs.db
+Desktop.ini
