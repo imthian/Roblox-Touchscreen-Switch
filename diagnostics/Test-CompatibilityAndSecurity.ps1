@@ -1,15 +1,6 @@
 <#
 .SYNOPSIS
-    Roblox Touchscreen Switch - Windows 11 Compatibility & Security Verification Suite
-.DESCRIPTION
-    Can be run by either your Administrator account or your son's Standard Child account
-    to verify:
-      1. Locale-independent HID Touchscreen detection (Usage Page 000D:0004 + FriendlyName) & PinnedInstanceIds check
-      2. Application binary and worker script installation under $env:ProgramFiles
-      3. Directory Owner (SYSTEM or Administrators) AND NTFS ACL lockdown on BOTH
-         $env:ProgramFiles\RobloxTouchscreenSwitch AND $env:ProgramData\RobloxTouchscreenSwitch
-      4. Scheduled Task registration, full powershell.exe path, SYSTEM principal, and SDDL execute rights ('(A;;GRGX;;;AU)')
-      5. SYSTEM Audit Log & status.json accessibility
+    Roblox Touchscreen Switch - Windows 11 Compatibility & Security Verification Suite (v1.2.4)
 #>
 [CmdletBinding()]
 param()
@@ -18,7 +9,15 @@ $ErrorActionPreference = 'Continue'
 $InstallDir  = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch'
 $DataDir     = Join-Path $env:ProgramData  'RobloxTouchscreenSwitch'
 $VersionFile = Join-Path $InstallDir 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.3' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.4' }
+
+$ModulePath  = Join-Path $InstallDir 'SecurityValidation.psm1'
+if (-not (Test-Path -LiteralPath $ModulePath)) {
+    $ModulePath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Definition) '..\core\SecurityValidation.psm1'
+}
+if (Test-Path -LiteralPath $ModulePath) {
+    Import-Module $ModulePath -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - COMPATIBILITY & SECURITY AUDIT" -ForegroundColor Cyan
@@ -80,38 +79,19 @@ if ((Test-Path -LiteralPath $ExePath) -and (Test-Path -LiteralPath $WorkerPath))
     Report-Check 'FAIL' "Application Installation Check" "Files missing in '$InstallDir'. Run Install-RobloxTouchSwitch.bat as Administrator."
 }
 
-# Check 3: Directory Owner (Administrators/SYSTEM) & NTFS ACL Lockdown on Program Files AND ProgramData
-$SidSystem = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
-$SidAdmins = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
-
+# Check 3: Directory Owner & NTFS ACL Lockdown on Program Files AND ProgramData using shared Test-SafeDirectoryAcl
 foreach ($ProtectedPath in @($InstallDir, $DataDir)) {
     if (Test-Path -LiteralPath $ProtectedPath) {
         try {
             $Item = Get-Item -LiteralPath $ProtectedPath -Force
             $IsReparse = ($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
             $Acl = Get-Acl -LiteralPath $ProtectedPath
-            $OwnerSid = $Acl.GetOwner([System.Security.Principal.SecurityIdentifier])
-            $TrustedOwner = ($OwnerSid -eq $SidSystem) -or ($OwnerSid -eq $SidAdmins)
-            $R = [System.Security.AccessControl.FileSystemRights]
-            $WriteMask = [int]($R::WriteData -bor $R::AppendData -bor $R::WriteExtendedAttributes -bor `
-                               $R::WriteAttributes -bor $R::DeleteSubdirectoriesAndFiles -bor `
-                               $R::Delete -bor $R::ChangePermissions -bor $R::TakeOwnership)
-            $UnsafeRules = @()
-            $AccessRules = $Acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
-            foreach ($rule in $AccessRules) {
-                if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) {
-                    if (([int]$rule.FileSystemRights -band $WriteMask) -ne 0) {
-                        $RuleSid = [System.Security.Principal.SecurityIdentifier]$rule.IdentityReference
-                        if ($RuleSid -ne $SidSystem -and $RuleSid -ne $SidAdmins) {
-                            $UnsafeRules += $rule
-                        }
-                    }
-                }
-            }
-            if (-not $IsReparse -and $TrustedOwner -and $UnsafeRules.Count -eq 0) {
+            $CheckResult = Test-SafeDirectoryAcl -DirectoryAcl $Acl -PathDescription "'$ProtectedPath'"
+            if (-not $IsReparse -and $CheckResult.Success) {
                 Report-Check 'PASS' "Owner & NTFS Lockdown Verified on '$ProtectedPath'" "Owned by Admin/SYSTEM; Standard Users have Read-Only access."
             } else {
-                Report-Check 'FAIL' "Owner or NTFS Lockdown Weak on '$ProtectedPath'" "TrustedOwner=$TrustedOwner, Reparse=$IsReparse, UnsafeRules=$($UnsafeRules.Count)"
+                $err = if ($IsReparse) { "ReparsePoint detected." } else { $CheckResult.Error }
+                Report-Check 'FAIL' "Owner or NTFS Lockdown Weak on '$ProtectedPath'" $err
             }
         } catch {
             Report-Check 'WARN' "NTFS ACL Inspection ($ProtectedPath)" $_.Exception.Message

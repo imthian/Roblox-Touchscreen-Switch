@@ -1,24 +1,11 @@
 <#
 .SYNOPSIS
-    Roblox Touchscreen Switch - Protected SYSTEM Worker Script (v1.2.3)
+    Roblox Touchscreen Switch - Protected SYSTEM Worker Script (v1.2.4)
 .DESCRIPTION
     Executes strictly under NT AUTHORITY\SYSTEM via Windows Scheduled Tasks:
       - \RobloxTouchscreenSwitch\DisableTouchscreen (Mouse Mode)
       - \RobloxTouchscreenSwitch\EnableTouchscreen  (Restore Touch)
       - \RobloxTouchscreenSwitch\RestoreTouchOnBoot (Safety Startup Recovery)
-
-    SECURITY & RELIABILITY ARCHITECTURE (v1.2.3):
-    1. Dynamic Environment Paths: Uses $env:ProgramFiles and $env:ProgramData.
-    2. Atomic Directory Creation & Strict SID Allowlist Verification:
-       - If $env:ProgramData\RobloxTouchscreenSwitch is missing, confirms non-existence, creates it atomically
-         via [System.IO.Directory]::CreateDirectory($DataDir, $DataAcl), applies Set-Acl, and verifies it is empty.
-       - Verifies the folder is NOT a ReparsePoint, is owned by SYSTEM (S-1-5-18) or Administrators (S-1-5-32-544),
-         and enforces a strict SID Allowlist using GetAccessRules($true, $true, [SecurityIdentifier]) directly.
-       - $WriteRightsMask is restricted strictly to write/modify/delete/takeownership bits (0xD0156), so legitimate
-         ReadAndExecute rules (0x1200A9) pass cleanly (0x1200A9 -band 0xD0156 = 0).
-    3. Strict $script:DataDirTrusted Gate: Refuses to write a single byte if DataDir fails verification.
-    4. Two-Pass All-or-Nothing Pre-Check on Disable: Checks all target nodes for driver faults before
-       disabling any node so a faulted node never leaves sibling nodes partially disabled.
 #>
 [CmdletBinding()]
 param(
@@ -31,26 +18,23 @@ $ErrorActionPreference = 'Stop'
 
 $InstallDir  = Join-Path $env:ProgramFiles 'RobloxTouchscreenSwitch'
 $VersionFile = Join-Path $InstallDir 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.3' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.4' }
 $ConfigPath  = Join-Path $InstallDir 'config.json'
 $DataDir     = Join-Path $env:ProgramData 'RobloxTouchscreenSwitch'
 $StatusPath  = Join-Path $DataDir 'status.json'
 $LogPath     = Join-Path $DataDir 'system-activity.log'
 $OldLogPath  = Join-Path $DataDir 'system-activity.old.log'
 
+$ModulePath  = Join-Path $InstallDir 'SecurityValidation.psm1'
+if (-not (Test-Path -LiteralPath $ModulePath)) {
+    $ModulePath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Definition) 'SecurityValidation.psm1'
+}
+Import-Module $ModulePath -Force -ErrorAction Stop
+
 $SidSystem = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
 $SidAdmins = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
 $SidUsers  = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-
-# Strict Write-Only Rights Mask (0xD0156):
-# WriteData (0x2), AppendData (0x4), WriteExtendedAttributes (0x10), WriteAttributes (0x100),
-# DeleteSubdirectoriesAndFiles (0x40), Delete (0x10000), ChangePermissions (0x40000), TakeOwnership (0x80000).
-# Excludes Read-related bits so Users: ReadAndExecute (0x1200A9) passes cleanly (0x1200A9 -band 0xD0156 = 0).
-$R = [System.Security.AccessControl.FileSystemRights]
-$WriteRightsMask = [int]($R::WriteData -bor $R::AppendData -bor $R::WriteExtendedAttributes -bor `
-                         $R::WriteAttributes -bor $R::DeleteSubdirectoriesAndFiles -bor `
-                         $R::Delete -bor $R::ChangePermissions -bor $R::TakeOwnership)
 
 $script:DataDirTrusted = $false
 
@@ -70,7 +54,7 @@ function Initialize-LockedDataDir {
         $DataAcl.AddAccessRule($RuleUsers)
 
         if (Test-Path -LiteralPath $DataDir) {
-            throw "SECURITY ABORT: '$DataDir' already existed before atomic creation. Re-run Install-RobloxTouchSwitch.bat as Administrator."
+            throw "SECURITY ABORT: '$DataDir' already existed before atomic creation."
         }
 
         [System.IO.Directory]::CreateDirectory($DataDir, $DataAcl) | Out-Null
@@ -78,33 +62,19 @@ function Initialize-LockedDataDir {
 
         $PreExistingItems = @(Get-ChildItem -LiteralPath $DataDir -Force -ErrorAction SilentlyContinue)
         if ($PreExistingItems.Count -gt 0) {
-            throw "SECURITY ABORT: Newly created '$DataDir' was not empty. Re-run Install-RobloxTouchSwitch.bat as Administrator."
+            throw "SECURITY ABORT: Newly created '$DataDir' was not empty."
         }
     }
 
     $Item = Get-Item -LiteralPath $DataDir -Force
     if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "SECURITY ABORT: '$DataDir' is a ReparsePoint (symlink/junction). Re-run Install-RobloxTouchSwitch.bat as Administrator."
+        throw "SECURITY ABORT: '$DataDir' is a ReparsePoint (symlink/junction)."
     }
 
     $CurrentAcl = Get-Acl -LiteralPath $DataDir
-    $OwnerSid = $CurrentAcl.GetOwner([System.Security.Principal.SecurityIdentifier])
-    if ($OwnerSid -ne $SidSystem -and $OwnerSid -ne $SidAdmins) {
-        throw "SECURITY ABORT: '$DataDir' is owned by untrusted SID '$($OwnerSid.Value)'. Re-run Install-RobloxTouchSwitch.bat as Administrator."
-    }
-
-    # Strict Allowlist Check: Uses direct SID enumeration to avoid translation exceptions on deleted accounts
-    $AccessRules = $CurrentAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
-    foreach ($rule in $AccessRules) {
-        if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) {
-            $HasWrite = ([int]$rule.FileSystemRights -band $WriteRightsMask) -ne 0
-            if ($HasWrite) {
-                $RuleSid = [System.Security.Principal.SecurityIdentifier]$rule.IdentityReference
-                if ($RuleSid -ne $SidSystem -and $RuleSid -ne $SidAdmins) {
-                    throw "SECURITY ABORT: '$DataDir' grants write/modify rights to untrusted SID '$($RuleSid.Value)'. Re-run Install-RobloxTouchSwitch.bat as Administrator."
-                }
-            }
-        }
+    $CheckResult = Test-SafeDirectoryAcl -DirectoryAcl $CurrentAcl -PathDescription "'$DataDir'"
+    if (-not $CheckResult.Success) {
+        throw "SECURITY ABORT: $($CheckResult.Error)"
     }
 
     $script:DataDirTrusted = $true
@@ -126,9 +96,10 @@ function Test-SafeTargetFile {
             throw "SECURITY ABORT: '$FilePath' is owned by untrusted SID '$($FileOwner.Value)'."
         }
         $FileRules = $FileAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+        $WriteMask = Get-WriteRightsMask
         foreach ($rule in $FileRules) {
             if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) {
-                $HasWrite = ([int]$rule.FileSystemRights -band $WriteRightsMask) -ne 0
+                $HasWrite = ([int]$rule.FileSystemRights -band $WriteMask) -ne 0
                 if ($HasWrite) {
                     $RuleSid = [System.Security.Principal.SecurityIdentifier]$rule.IdentityReference
                     if ($RuleSid -ne $SidSystem -and $RuleSid -ne $SidAdmins) {

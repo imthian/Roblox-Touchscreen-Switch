@@ -1,11 +1,11 @@
 # Roblox Touchscreen Switch (Windows 11 Handheld Utility)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version: 1.2.3](https://img.shields.io/badge/Version-1.2.3-brightgreen.svg)](CHANGELOG.md)
+[![Version: 1.2.4](https://img.shields.io/badge/Version-1.2.4-brightgreen.svg)](CHANGELOG.md)
 [![Platform: Windows 11](https://img.shields.io/badge/Platform-Windows%2011-0078D6.svg)]()
 [![Devices: MSI Claw | ROG Ally | Legion Go](https://img.shields.io/badge/Devices-MSI%20Claw%20%7C%20ASUS%20ROG%20Ally%20%7C%20Windows%20Handhelds-success.svg)]()
 
-A lightweight, open-source Windows 11 graphical utility that fixes the **Roblox external mouse click/grab bug** (especially in games like *Fling Things and People*) on touchscreen gaming handhelds and laptops—such as the **MSI Claw A1M** and **ASUS ROG Ally Z1 Extreme**—while allowing **Standard Windows Users / Microsoft Child Accounts** to toggle the touchscreen **OFF (Mouse Mode)** and **ON (Restore Touch)** with **zero Administrator password prompts**.
+A lightweight, open-source Windows 11 graphical utility that fixes the **Roblox external mouse click/grab bug** (especially in games like *Fling Things and People*) on touchscreen gaming handhelds and laptopsâ€”such as the **MSI Claw A1M** and **ASUS ROG Ally Z1 Extreme**â€”while allowing **Standard Windows Users / Microsoft Child Accounts** to toggle the touchscreen **OFF (Mouse Mode)** and **ON (Restore Touch)** with **zero Administrator password prompts**.
 
 ---
 
@@ -15,11 +15,11 @@ When playing Roblox in docked or desktop mode with an external mouse on Windows 
 - The external mouse cursor moves normally.
 - Mouse clicks work inside Roblox menus.
 - **Mouse clicks and hold/drag actions fail to register during live gameplay** (for example, grabbing and throwing objects or players in *Fling Things and People*).
-- Disabling the touchscreen device in Windows Device Manager immediately fixes the issue—but **Device Manager requires Administrator privileges**, leaving parents with a frustrating dilemma if their child plays on a **Standard User / Microsoft Family Child Account**.
+- Disabling the touchscreen device in Windows Device Manager immediately fixes the issueâ€”but **Device Manager requires Administrator privileges**, leaving parents with a frustrating dilemma if their child plays on a **Standard User / Microsoft Family Child Account**.
 
 ---
 
-## What This Utility Does (v1.2.3)
+## What This Utility Does (v1.2.4)
 
 **Roblox Touchscreen Switch** provides a handheld-friendly Windows Forms graphical app (`RobloxTouchSwitch.exe`) backed by narrowly restricted `NT AUTHORITY\SYSTEM` Scheduled Tasks:
 
@@ -41,11 +41,11 @@ When playing Roblox in docked or desktop mode with an external mouse on Windows 
 
 ## Quick Installation
 
-1. Log into your **Administrator account** and extract **`ROBLOX TOUCHSCREEN SWITCH (v1.2.3).zip`** (or clone this repository) inside your **Administrator account's own profile folder** (e.g., `C:\Users\<AdminUser>\Downloads\RobloxTouchscreenSwitch`)—never extract into a shared or child-writable directory before running the installer.
+1. Log into your **Administrator account** and extract **`ROBLOX TOUCHSCREEN SWITCH (v1.2.4).zip`** (or clone this repository) inside your **Administrator account's own profile folder** (e.g., `C:\Users\<AdminUser>\Downloads\RobloxTouchscreenSwitch`)â€”never extract into a shared or child-writable directory before running the installer.
 2. Right-click **`Install-RobloxTouchSwitch.bat`** and select **Run as administrator**.
 3. The installer automatically:
    - Verifies your touchscreen hardware node(s) (`HID_DEVICE_UP:000D_U:0004`).
-   - Compiles the native GUI executable (`$env:ProgramFiles\RobloxTouchscreenSwitch\RobloxTouchSwitch.exe`) using the built-in Windows .NET Framework compiler (`csc.exe`)—**no third-party runtimes required**. *(Note: Because the binary is compiled locally on your machine during install, environments enforcing strict enterprise AppLocker or Defender ASR rules may require whitelisting `$env:ProgramFiles\RobloxTouchscreenSwitch\RobloxTouchSwitch.exe`.)*
+   - Compiles the native GUI executable (`$env:ProgramFiles\RobloxTouchscreenSwitch\RobloxTouchSwitch.exe`) using the built-in Windows .NET Framework compiler (`csc.exe`)â€”**no third-party runtimes required**. *(Note: Because the binary is compiled locally on your machine during install, environments enforcing strict enterprise AppLocker or Defender ASR rules may require whitelisting `$env:ProgramFiles\RobloxTouchscreenSwitch\RobloxTouchSwitch.exe`.)*
    - Sets `Administrators` ownership and locks down NTFS permissions on `$env:ProgramFiles\RobloxTouchscreenSwitch\` and `$env:ProgramData\RobloxTouchscreenSwitch\`.
    - Registers `\RobloxTouchscreenSwitch\DisableTouchscreen`, `\RobloxTouchscreenSwitch\EnableTouchscreen`, and `\RobloxTouchscreenSwitch\RestoreTouchOnBoot` using `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`.
    - Creates shortcuts on the **Public Desktop** and **Start Menu** (`Start -> All Apps -> Roblox Touchscreen Switch`) for all accounts on the PC.
@@ -62,8 +62,8 @@ Run **`Run-Compatibility-Check.bat`** from either an Administrator or Standard U
 - Scheduled Task SDDL (`(A;;GRGX;;;AU)`) permissions
 - Read-only `system-activity.log` accessibility
 
-### Release Archive Checksum (v1.2.3)
-- `ROBLOX TOUCHSCREEN SWITCH (v1.2.3).zip` SHA-256: `e4af6ded468eca2695b3cdbe6dc0a2bd69ccf4142aa4fd43f1c60abac0f976a0`
+### Release Archive Checksum (v1.2.4)
+- `ROBLOX TOUCHSCREEN SWITCH (v1.2.4).zip` SHA-256: `47d90c369511e301210e70f7327b5a113466769e44029dc7dccf2319706c0fd0`
 - Repository file hashes (with Unix LF line endings for `sha256sum -c SHA256SUMS.txt`): see [`SHA256SUMS.txt`](SHA256SUMS.txt).
 
 ---

@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 $ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $PackageRoot = Split-Path -Parent $ScriptRoot
 $VersionFile = Join-Path $PackageRoot 'VERSION'
-$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.3' }
+$AppVersion  = if (Test-Path -LiteralPath $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '1.2.4' }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "  ROBLOX TOUCHSCREEN SWITCH v$AppVersion - WINDOWS 11 ADMIN INSTALLER" -ForegroundColor Cyan
@@ -131,6 +131,7 @@ New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $ScriptRoot 'Invoke-TouchscreenAction.ps1') -Destination (Join-Path $InstallDir 'Invoke-TouchscreenAction.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $ScriptRoot 'RobloxTouchSwitchApp.cs')      -Destination (Join-Path $InstallDir 'RobloxTouchSwitchApp.cs') -Force
+Copy-Item -LiteralPath (Join-Path $ScriptRoot 'SecurityValidation.psm1')     -Destination (Join-Path $InstallDir 'SecurityValidation.psm1') -Force
 if (Test-Path -LiteralPath $VersionFile) {
     Copy-Item -LiteralPath $VersionFile -Destination (Join-Path $InstallDir 'VERSION') -Force
 }
