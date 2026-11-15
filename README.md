@@ -9,6 +9,15 @@ A lightweight, open-source Windows 11 graphical utility that fixes the **Roblox 
 
 ---
 
+> [!NOTE]
+> **Windows 11 Smart App Control Caveat:**
+> During installation, `Install-RobloxTouchSwitch.bat` compiles `core/RobloxTouchSwitchApp.cs` locally on your device using the built-in .NET compiler (`csc.exe`) so no pre-compiled third-party binaries are distributed. Because this locally compiled executable (`RobloxTouchSwitch.exe`) does not carry a paid commercial code-signing certificate, **Windows 11 Smart App Control** may block it on first launch if Smart App Control is turned **On**.
+>
+> **One-Time Fix (Admin Required):**
+> 1. Open **Windows Security** → **App & browser control** → **Smart App Control settings**.
+> 2. Set **Smart App Control** to **Off** and confirm with your Administrator PIN/password.
+> 3. Leave **Reputation-based protection** (SmartScreen) and **Exploit protection** turned **On**—Microsoft Defender Antivirus real-time protection remains fully active.
+
 ## The Problem
 
 When playing Roblox in docked or desktop mode with an external mouse on Windows 11 touchscreen handhelds (**MSI Claw**, **ASUS ROG Ally**, **Lenovo Legion Go**) or touchscreen laptops:

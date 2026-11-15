@@ -30,3 +30,17 @@ Target Devices: MSI Claw A1M (Intel), ASUS ROG Ally Z1 Extreme, & Windows 11 Han
    Step 3: Switch to your son's Standard Microsoft Child account. He can now launch
            "Roblox Touchscreen Switch" from the Desktop, Start Menu, or Xbox App
            with zero password prompts!
+
+-------------------------------------------------------------------------------
+NOTE ON WINDOWS 11 SMART APP CONTROL
+-------------------------------------------------------------------------------
+Install-RobloxTouchSwitch.bat compiles RobloxTouchSwitch.exe locally from
+core\RobloxTouchSwitchApp.cs using Windows' built-in .NET csc.exe compiler.
+Because this locally compiled executable does not have a paid commercial
+code-signing certificate, Windows 11 Smart App Control may block it on first
+launch if Smart App Control is set to On.
+
+One-Time Fix (Admin Required):
+  1. Open Windows Security -> App & browser control -> Smart App Control settings.
+  2. Set Smart App Control to Off and confirm with your Administrator PIN/password.
+  3. Leave Reputation-based protection (SmartScreen) and Exploit protection On.
