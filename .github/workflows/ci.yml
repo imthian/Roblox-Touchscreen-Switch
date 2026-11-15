@@ -38,7 +38,7 @@ jobs:
         run: |
           Install-Module -Name PSScriptAnalyzer -RequiredVersion '1.23.0' -Force -Scope CurrentUser
           Import-Module PSScriptAnalyzer -RequiredVersion '1.23.0'
-          $results = Invoke-ScriptAnalyzer -Path .\core, .\diagnostics -Recurse -Severity Error, Warning
+          $results = @('.\core', '.\diagnostics') | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Recurse -Severity Error, Warning }
           if ($results) {
             $results | Format-Table -AutoSize
           }
